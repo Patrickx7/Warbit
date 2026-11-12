@@ -458,6 +458,7 @@ export class Match {
       p.ammo[slot]--;
       p.nextFire = p.simTime + 60 / w.rpm;
       p.shot = (p.shot + 1) & 255;
+      p.lastFireTick = this.tick; // atirar revela quem está escondido na moita
       this.shoot(p, w, (inp.buttons2 & BTN2_ADS) !== 0, slot === 0 ? lo.primary.name : lo.secondary.name);
     }
   }

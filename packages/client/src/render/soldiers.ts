@@ -108,6 +108,7 @@ export interface SoldierPose {
   crouch: boolean; prone: boolean; sprint: boolean; downed: boolean;
   team: number; armor: number; helmet: number; gun: number;
   marker: number; // 0 nenhum, 1 aliado, 2 inimigo marcado
+  camo: number;   // 0..1: dentro de uma moita
   dist: number;
 }
 
@@ -199,7 +200,9 @@ export class Soldiers {
     const sw = Math.sin(ph) * amp * (p.sprint ? 0.95 : 0.7);
     const cs = Math.cos(ph);
     const uni = col.setHex(UNIFORM[p.team]);
-    const ur = uni.r, ug = uni.g, ub = uni.b;
+    // dentro da moita o uniforme "pega" a cor da folhagem (camuflagem)
+    const cm = p.camo * 0.6;
+    const ur = uni.r * (1 - cm) + 0.24 * cm, ug = uni.g * (1 - cm) + 0.4 * cm, ub = uni.b * (1 - cm) + 0.18 * cm;
 
     root.copy(local(p.x, p.y, p.z, 0, p.yaw, 0));
     if (p.downed) root.multiply(local(0, 0.16, -0.75, Math.PI / 2 - 0.06, 0, 0));

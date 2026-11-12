@@ -25,7 +25,7 @@ interface Ent { samples: Sample[]; s: EntityState; shot: number; x: number; y: n
 
 const dir = { x: 0, y: 0, z: 0 };
 const tmpV = new THREE.Vector3();
-const pose: SoldierPose = { id: 0, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, crouch: false, prone: false, sprint: false, downed: false, team: 0, armor: 0, helmet: 0, gun: 0, marker: 0, dist: 0 };
+const pose: SoldierPose = { id: 0, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, crouch: false, prone: false, sprint: false, downed: false, team: 0, armor: 0, helmet: 0, gun: 0, marker: 0, camo: 0, dist: 0 };
 
 function lerpAngle(a: number, b: number, t: number) {
   let d = (b - a) % (Math.PI * 2);
@@ -430,6 +430,20 @@ class Game {
     this.prevButtons = b;
   }
 
+  /** as moitas balançam com o jogador e com os 15 soldados mais próximos */
+  private updateMovers(t: number) {
+    const cam = this.gs.camera.position;
+    const list: { x: number; z: number; d: number }[] = [];
+    if (this.life !== LIFE_NONE) list.push({ x: cam.x, z: cam.z, d: 0 });
+    for (const e of this.ents.values()) {
+      const d = (e.x - cam.x) ** 2 + (e.z - cam.z) ** 2;
+      if (d > 900) continue;
+      list.push({ x: e.x, z: e.z, d });
+    }
+    list.sort((a, b) => a.d - b.d);
+    this.gs.setMovers(list.slice(0, 16), t);
+  }
+
   // ---------- quadro ----------
   private frame(now: number) {
     requestAnimationFrame((t) => this.frame(t));
@@ -508,6 +522,7 @@ class Game {
       pose.gun = GUN_KIND[ITEMS[st.weapon]?.weapon?.cls ?? 'rifle'] ?? 0;
       pose.dist = Math.hypot(e.x - cam.position.x, e.z - cam.position.z);
       pose.marker = ally ? 1 : st.marked ? 2 : 0;
+      pose.camo = this.world.inBush(e.x, e.z) ? 1 : 0;
       s.add(pose, dt);
       if (ally) dots.push({ x: e.x, z: e.z, team: st.team, kind: downed ? 2 : 0 });
       else if (st.marked) dots.push({ x: e.x, z: e.z, team: st.team, kind: 1 });
@@ -519,6 +534,7 @@ class Game {
     s.end();
 
     this.gs.grass.update(cam.position.x, cam.position.z, now / 1000);
+    this.updateMovers(now / 1000);
 
     const speed = Math.hypot(p.vx, p.vz);
     const reloading = !!this.own && (this.own.flags & 1) !== 0;
@@ -630,6 +646,9 @@ function runBench() {
   const perf = $('perf');
   perf.style.fontSize = '15px'; perf.style.color = '#fff';
   const camR = Number(new URLSearchParams(location.search).get('r')) || 34;
+  const focus = new URLSearchParams(location.search).has('bush');
+  const bd = Number(new URLSearchParams(location.search).get('bd')) || 7; // distância da câmera à moita no modo foco
+  const bu = [...world.bushes].sort((p, q) => Math.hypot(p.x - c.x, p.z - c.z) - Math.hypot(q.x - c.x, q.z - c.z))[0];
   let last = performance.now(), fps = 60, minFps = 999, frames = 0;
   const loop = (now: number) => {
     requestAnimationFrame(loop);
@@ -639,9 +658,16 @@ function runBench() {
     const t = now / 1000;
     const a = t * 0.15;
     const cy = world.heightAt(c.x, c.z);
-    gs.camera.position.set(c.x + Math.cos(a) * camR, cy + camR * 0.24 + 0.9, c.z + Math.sin(a) * camR);
-    gs.camera.lookAt(c.x, cy + 1, c.z);
+    if (focus) {
+      // câmera parada olhando uma moita: um soldado deitado e um agachado dentro, um em pé do lado de fora
+      gs.camera.position.set(bu.x + bd, bu.y + 1.2, bu.z + bd * 0.4);
+      gs.camera.lookAt(bu.x, bu.y + 0.9, bu.z);
+    } else {
+      gs.camera.position.set(c.x + Math.cos(a) * camR, cy + camR * 0.24 + 0.9, c.z + Math.sin(a) * camR);
+      gs.camera.lookAt(c.x, cy + 1, c.z);
+    }
     gs.grass.update(gs.camera.position.x, gs.camera.position.z, t);
+    gs.setMovers(focus ? [{ x: bu.x + 3, z: bu.z + 0.5 }] : [], t);
     soldiers.begin();
     for (let i = 0; i < 100; i++) {
       const ring = 6 + (i % 10) * 3, sp = 1.5 + (i % 4) * 1.6, ang = (i * 0.7 + (t * sp) / ring) * (i % 2 ? 1 : -1);
@@ -650,8 +676,15 @@ function runBench() {
       pose.yaw = (i % 2 ? -ang : -ang + Math.PI); pose.pitch = Math.sin(t + i) * 0.2;
       pose.crouch = i % 9 === 0; pose.prone = i % 13 === 0; pose.sprint = sp > 5; pose.downed = i % 23 === 0; pose.team = i % 3; pose.armor = i % 5; pose.helmet = (i * 3) % 5; pose.gun = i % 4;
       pose.marker = i % 3 === 0 ? 1 : i % 17 === 0 ? 2 : 0;
-      pose.dist = Math.hypot(x - gs.camera.position.x, z - gs.camera.position.z);
-      soldiers.add(pose, dt);
+      pose.camo = 0;
+      if (focus && i < 3) {
+        const ox = i === 0 ? -0.3 : i === 1 ? 0.5 : 3.2, oz = i === 0 ? 0.2 : i === 1 ? -0.6 : 0.5;
+        pose.x = bu.x + ox; pose.z = bu.z + oz; pose.y = bu.y; pose.yaw = Math.PI / 2 + 0.3;
+        pose.prone = i === 0; pose.crouch = i === 1; pose.downed = false; pose.sprint = false; pose.marker = 0; pose.team = i;
+        pose.camo = i < 2 ? 1 : 0;
+      } else if (focus) { pose.x = bu.x + 400; pose.z = bu.z + 400; }
+      pose.dist = Math.hypot(pose.x - gs.camera.position.x, pose.z - gs.camera.position.z);
+      soldiers.add(pose, focus && i < 3 ? 0 : dt);
     }
     soldiers.end();
     gs.render();

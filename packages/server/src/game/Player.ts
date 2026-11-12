@@ -43,6 +43,7 @@ export class Player {
   hasDefib = false;
   hasMark = false;
   hasFob = false;
+  lastFireTick = -99999;
   maxReserve = [0, 0];
   lastAttacker = -1;
   healReady = 0;

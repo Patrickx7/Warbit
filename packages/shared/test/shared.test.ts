@@ -171,6 +171,32 @@ describe('loja', () => {
   });
 });
 
+describe('moitas', () => {
+  it('têm tamanho para esconder um soldado e dá para entrar nelas', () => {
+    expect(world.bushes.length).toBeGreaterThan(300);
+    const b = world.bushes[0];
+    expect(b.r).toBeGreaterThanOrEqual(1.3);
+    expect(world.inBush(b.x, b.z)).toBe(b);
+    expect(world.inBush(b.x + b.r * 2, b.z)).not.toBe(b);
+    // sem colisão: o jogador atravessa a moita
+    const s = newMoveState(b.x - b.r * 1.5, world.heightAt(b.x, b.z) + 0.1, b.z);
+    for (let i = 0; i < 60; i++) stepMove(s, 0, 0, world, DT);
+    let inside = false;
+    for (let i = 0; i < 90; i++) { stepMove(s, BTN_FWD, -Math.PI / 2, world, DT); inside ||= world.inBush(s.x, s.z) !== null; }
+    expect(inside).toBe(true);
+  });
+  it('a moita em que o observador/alvo está não bloqueia a visão, uma no meio do caminho sim', () => {
+    // moita isolada: nenhuma outra por perto, para o resultado depender só dela
+    const b = world.bushes.find((q) => world.bushes.every((o) => o === q || Math.hypot(o.x - q.x, o.z - q.z) > 45)
+      && world.heightAt(q.x - 30, q.z) < q.y + 2 && world.heightAt(q.x + 30, q.z) < q.y + 2 && world.heightAt(q.x + 30, q.z) > q.y - 2)!;
+    expect(b).toBeTruthy();
+    const y = b.y + 1.2;
+    expect(world.bushBlocks(b.x - 30, y, b.z, b.x + 30, y, b.z)).toBe(true); // no meio do caminho
+    expect(world.bushBlocks(b.x, y, b.z, b.x + 30, y, b.z)).toBe(false); // observador dentro dela
+    expect(world.bushBlocks(b.x - 30, y, b.z, b.x, y, b.z)).toBe(false); // alvo dentro dela
+  });
+});
+
 describe('miras', () => {
   it('compra mira óptica e soma o custo', () => {
     const r = buildLoadout(['fuzil_padrao', 'mira_pontovermelho'], 20, 99999);

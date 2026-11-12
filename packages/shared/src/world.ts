@@ -639,10 +639,11 @@ export class World {
       if (x < 6 || z < 6 || x > WORLD_SIZE - 6 || z > WORLD_SIZE - 6) return;
       if (this.roadDist(x, z) < 4.2) return;
       if (this.bases.some((b) => Math.hypot(b.x - x, b.z - z) < 50)) return;
-      const r = (1.0 + rnd() * 0.9) * big;
+      // grandes o bastante para um soldado entrar e se esconder
+      const r = (1.4 + rnd() * 1.1) * big;
       if (!this.areaFree(x - r * 0.7, z - r * 0.7, x + r * 0.7, z + r * 0.7, 0.2)) return;
       const y = this.heightAt(x, z);
-      this.addBush({ x, y, z, r, h: 1.25 + rnd() * 0.8 });
+      this.addBush({ x, y, z, r, h: 1.5 + rnd() * 0.8 });
     };
     // cercas vivas ao longo das estradas
     for (const r of this.roads) {
@@ -768,12 +769,27 @@ export class World {
     }
   }
 
-  /** Há uma moita entre os dois pontos? De muito perto (< 6 m) a moita não esconde. */
+  /**
+   * A moita em que o ponto está DENTRO (dá para entrar nela), se houver.
+   * Quem está dentro fica camuflado: ver `Bots.canSpot` para o alcance de detecção.
+   */
+  inBush(x: number, z: number): Bush | null {
+    const arr = this.bushGrid.get(Math.floor(z / BCELL) * BGRID + Math.floor(x / BCELL));
+    if (!arr) return null;
+    for (let i = 0; i < arr.length; i++) {
+      const b = arr[i];
+      const ex = x - b.x, ez = z - b.z, r = b.r * 0.85;
+      if (ex * ex + ez * ez < r * r) return b;
+    }
+    return null;
+  }
+
+  /** Há uma moita ENTRE os dois pontos (que não seja aquela em que um deles está)? De perto (< 6 m) a folhagem não esconde. */
   bushBlocks(ax: number, ay: number, az: number, bx: number, by: number, bz: number): boolean {
     const dx = bx - ax, dy = by - ay, dz = bz - az;
     const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (d < 6) return false;
-    for (let t = 2.5; t <= d; t += 1.2) {
+    for (let t = 2.5; t <= d - 1; t += 1.2) {
       const k = t / d;
       const x = ax + dx * k, y = ay + dy * k, z = az + dz * k;
       const arr = this.bushGrid.get(Math.floor(z / BCELL) * BGRID + Math.floor(x / BCELL));
@@ -782,7 +798,10 @@ export class World {
         const b = arr[i];
         if (y < b.y - 0.3 || y > b.y + b.h) continue;
         const ex = x - b.x, ez = z - b.z;
-        if (ex * ex + ez * ez < b.r * b.r) return true;
+        if (ex * ex + ez * ez >= b.r * b.r) continue;
+        // moita em que o observador ou o alvo está: não bloqueia (a camuflagem dela é tratada à parte)
+        if ((ax - b.x) ** 2 + (az - b.z) ** 2 < b.r * b.r || (bx - b.x) ** 2 + (bz - b.z) ** 2 < b.r * b.r) continue;
+        return true;
       }
     }
     return false;

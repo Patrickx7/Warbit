@@ -252,30 +252,111 @@ export class GameScene {
     this.scene.add(im);
   }
 
+  /** Textura de folhas gerada em código: manchas de folha verde sobre fundo transparente (os vãos deixam ver quem está dentro). */
+  private leafTexture(): THREE.CanvasTexture {
+    const S = 128, cv = document.createElement('canvas');
+    cv.width = S; cv.height = S;
+    const c = cv.getContext('2d')!;
+    c.clearRect(0, 0, S, S);
+    let seed = 12345;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+    const greens = ['#3f7d33', '#4c8f3b', '#2f6a2b', '#5ba043', '#386f30'];
+    for (let i = 0; i < 80; i++) {
+      const x = rnd() * S, y = rnd() * S, r = 4.5 + rnd() * 7, a = rnd() * Math.PI;
+      // parte de baixo (onde ficam o agachado e o deitado) é bem mais rala: a silhueta aparece pelos vãos
+      if (y > S * 0.62 && rnd() < 0.72) continue;
+      c.save(); c.translate(x, y); c.rotate(a);
+      c.fillStyle = greens[Math.floor(rnd() * greens.length)];
+      c.beginPath(); c.ellipse(0, 0, r, r * 0.45, 0, 0, Math.PI * 2); c.fill();
+      c.strokeStyle = 'rgba(20,60,20,.5)'; c.lineWidth = 1; c.beginPath(); c.moveTo(-r, 0); c.lineTo(r, 0); c.stroke();
+      c.restore();
+    }
+    const t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 4;
+    return t;
+  }
+
+  private bushU = { uTime: { value: 0 }, uMovers: { value: Array.from({ length: 16 }, () => new THREE.Vector4(0, 0, 0, 0)) } };
+
   private buildBushes() {
     const bushes = this.world.bushes;
     if (!bushes.length) return;
-    const a = new THREE.IcosahedronGeometry(1, 0); a.scale(1, 0.62, 1); a.translate(0, 0.5, 0);
-    const b = new THREE.IcosahedronGeometry(0.7, 0); b.scale(1, 0.7, 1); b.translate(0.55, 0.42, 0.3);
-    const n = a.attributes.position.count + b.attributes.position.count;
-    const pos = new Float32Array(n * 3);
-    pos.set(a.attributes.position.array as Float32Array, 0);
-    pos.set(b.attributes.position.array as Float32Array, a.attributes.position.count * 3);
+    // 8 planos de folhas cruzados (6 em pé, 2 inclinados como "tampa"): denso por fora, com vãos
+    const pos: number[] = [], uv: number[] = [], nor: number[] = [];
+    const plane = (ang: number, tilt: number, off: number, w: number, h: number) => {
+      const ca = Math.cos(ang), sa = Math.sin(ang), ct = Math.cos(tilt), st = Math.sin(tilt);
+      const corner = (u: number, v: number): [number, number, number] => {
+        // v ao longo da altura (inclinada por `tilt` para fora), u ao longo da largura
+        const lx = u * w, ly = v * h * ct, lz = v * h * st + off;
+        return [lx * ca + lz * sa, ly, -lx * sa + lz * ca];
+      };
+      const a = corner(-1, 0), b = corner(1, 0), c2 = corner(1, 1), d = corner(-1, 1);
+      pos.push(...a, ...b, ...c2, ...a, ...c2, ...d);
+      uv.push(0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1);
+      for (let i = 0; i < 6; i++) nor.push(0, 1, 0);
+    };
+    for (let i = 0; i < 6; i++) plane((i * Math.PI) / 3 + 0.2, 0.18 + (i % 2) * 0.12, 0.05, 1.05, 1.05);
+    plane(0.6, 1.15, 0.1, 0.95, 0.95);
+    plane(2.4, 1.15, 0.1, 0.95, 0.95);
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    g.computeVertexNormals();
-    const im = new THREE.InstancedMesh(g, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), bushes.length);
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    const mat = new THREE.MeshLambertMaterial({ map: this.leafTexture(), alphaTest: 0.5, side: THREE.DoubleSide, color: 0xffffff });
+    const U = this.bushU;
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uTime = U.uTime;
+      sh.uniforms.uMovers = U.uMovers;
+      sh.vertexShader = 'uniform float uTime;\nuniform vec4 uMovers[16];\nvarying float vCamDist;\n' + sh.vertexShader
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+          vec3 ctr = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+          float h01 = clamp(position.y, 0.0, 1.6) / 1.6;
+          float sw = sin(uTime * 1.7 + ctr.x * 0.35 + ctr.z * 0.21) * 0.5 + sin(uTime * 2.9 + ctr.z * 0.5) * 0.25;
+          transformed.x += sw * 0.10 * h01; transformed.z += sw * 0.05 * h01;`)
+        .replace('#include <project_vertex>', `
+          vec4 mvPosition = instanceMatrix * vec4(transformed, 1.0);
+          vec3 wv = mvPosition.xyz;
+          // quem passa empurra as folhas para os lados
+          for (int i = 0; i < 16; i++) {
+            vec4 mv = uMovers[i];
+            if (mv.w > 0.0) {
+              vec2 d = wv.xz - mv.xz;
+              float dist = length(d);
+              float f = (1.0 - smoothstep(0.0, 2.8, dist)) * mv.w;
+              if (dist > 0.001) wv.xz += normalize(d) * f * 0.5 * (0.35 + h01);
+            }
+          }
+          vCamDist = distance(cameraPosition, wv);
+          mvPosition = viewMatrix * vec4(wv, 1.0);
+          gl_Position = projectionMatrix * mvPosition;`);
+      sh.fragmentShader = 'varying float vCamDist;\n' + sh.fragmentShader.replace('#include <alphatest_fragment>', `
+        // folhas coladas na câmera somem (em tramado), para quem está dentro da moita enxergar para fora
+        if (vCamDist < 1.7 && fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) > vCamDist / 1.7) discard;
+        #include <alphatest_fragment>`);
+    };
+    const im = new THREE.InstancedMesh(g, mat, bushes.length);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
     const col = new THREE.Color();
-    const tones = [0x4f8a3c, 0x5c9644, 0x447a36, 0x6a9a4a];
+    const tones = [0xffffff, 0xe6f2d8, 0xd2e8c0, 0xf2ecc8];
     bushes.forEach((bu, i) => {
       q.setFromAxisAngle(up, (i * 1.618) % (Math.PI * 2));
-      m.compose(p.set(bu.x, bu.y - 0.15, bu.z), q, s.set(bu.r, bu.h * 1.25, bu.r));
+      m.compose(p.set(bu.x, bu.y - 0.1, bu.z), q, s.set(bu.r * 1.1, bu.h * 1.0, bu.r * 1.1));
       im.setMatrixAt(i, m);
       im.setColorAt(i, col.setHex(tones[i % tones.length]));
     });
     im.frustumCulled = false;
     this.scene.add(im);
+  }
+
+  /** posições de quem está perto (para as moitas balançarem ao passar) */
+  setMovers(list: { x: number; z: number }[], t: number) {
+    this.bushU.uTime.value = t;
+    const arr = this.bushU.uMovers.value;
+    for (let i = 0; i < 16; i++) {
+      const m = list[i];
+      if (m) arr[i].set(m.x, 0, m.z, 1); else arr[i].set(0, 0, 0, 0);
+    }
   }
 
   setZones(cz: Zone, hz: Zone) {

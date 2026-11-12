@@ -78,6 +78,13 @@ export class BotBrain {
     const d = Math.hypot(dx, dz);
     // campo de visão: ~200° à frente; de perto (ou quando acabou de levar tiro) percebe em volta
     if (d > 14 && !alerted && Math.abs(angDiff(yawTo(dx, dz), this.aimYaw)) > 1.75) return false;
+    // dentro de uma moita: só é notado de perto, e o alcance cai se estiver parado/baixo.
+    // Atirar revela por 3 s; folhagem não esconde de quem está colado (< 4 m).
+    if (m.world.inBush(e.ms.x, e.ms.z) && m.tick - e.lastFireTick > 90) {
+      const moving = Math.hypot(e.ms.vx, e.ms.vz) > 1.5;
+      const lim = e.ms.prone ? (moving ? 12 : 4) : e.ms.crouch ? (moving ? 22 : 8) : (moving ? 35 : 20);
+      if (d > Math.max(4, lim)) return false;
+    }
     // agachado e longe é mais difícil de notar
     if ((e.ms.crouch || e.ms.prone) && d > (e.ms.prone ? 60 : 120) && Math.random() < (e.ms.prone ? 0.75 : 0.5)) return false;
     return m.world.canSee(p.ms.x, this.eye(p), p.ms.z, e.ms.x, e.ms.y + (e.ms.prone ? 0.3 : e.ms.crouch ? 0.9 : 1.3), e.ms.z);
