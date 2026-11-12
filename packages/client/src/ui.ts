@@ -70,7 +70,7 @@ export class UI {
   private static readonly MM_ZOOMS = [0.22, 0.45, 0.9, 1.8]; // pixels por metro
   onSpawn: (items: string[]) => void = () => {};
   /** chamado a cada mudança no carrinho: atualiza a prévia 3D do soldado */
-  onPreview: (look: { armor: number; helmet: number; pack: number; gunCls: string }) => void = () => {};
+  onPreview: (look: { armor: number; helmet: number; pack: number; gun: number }) => void = () => {};
 
   constructor() {
     try { this.lastBuy = (JSON.parse(localStorage.getItem('warbit.lastBuy') ?? '[]') as string[]).filter((id) => ITEM_BY_ID[id]); } catch { /* sem armazenamento */ }
@@ -305,7 +305,7 @@ export class UI {
     for (const b of Array.from(slots.querySelectorAll('button')) as HTMLButtonElement[]) b.onclick = () => { this.sel.delete(b.dataset.id!); this.renderShop(); };
     if (res.ok) {
       const lo = res.loadout;
-      this.onPreview({ armor: lo.armor?.armor ?? 0, helmet: lo.helmet?.helmet ?? 0, pack: lo.pack?.pack ?? 0, gunCls: lo.primary.weapon?.cls ?? 'rifle' });
+      this.onPreview({ armor: lo.armor?.armor ?? 0, helmet: lo.helmet?.helmet ?? 0, pack: lo.pack?.pack ?? 0, gun: lo.primary.idx });
     }
     const cost = res.ok ? res.loadout.cost : 0;
     $('totalV').textContent = money(cost);

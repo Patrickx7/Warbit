@@ -8,6 +8,8 @@ FPS multiplayer leve no navegador: 100 jogadores, 3 times, Control Zone + Hot Zo
 - `npm run typecheck`
 - `npm run loadtest` — 100 clientes WebSocket reais contra o servidor rodando (`CLIENTS`, `SECONDS`, `URL`)
 - `http://localhost:5173/?bench=1` — benchmark de render com 100 soldados (`&r=5` câmera de perto)
+  - `&guns=1` catálogo lateral de todas as armas (`&d=3.4` aproxima) · `&vm=1&gun=<id>&sight=<id>&ads=1` arma em 1ª pessoa · `&bush=1` moita com soldados dentro
+- Publicar online: ver `DEPLOY.md` (servidor em host com processo ligado; cliente pode ir para a Vercel com `VITE_WS_URL`)
 
 ## Estrutura
 - `packages/shared` — roda igual no cliente e no servidor: `config.ts` (constantes de jogo), `world.ts` (mapa por seed, colisão, raycast, moitas), `movement.ts` (controlador determinístico), `items.ts` (loja e preços), `rewards.ts` (XP/cash), `scoring.ts`, `protocol.ts` (binário + JSON)

@@ -1,77 +1,34 @@
 import * as THREE from 'three';
 import type { Item, WeaponClass } from '@warbit/shared';
+import { gunModel, type GunModel } from './guns';
 
-const METAL = 0x34383c, DARK = 0x1e2022, WOOD = 0x70502f;
+const DARK = 0x1e2022;
 const SCALE = 0.72;
 
 const mat = (c: number) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
-function part(w: number, h: number, d: number, color: number, x: number, y: number, z: number, rx = 0): THREE.Mesh {
+const GUN_MAT = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+function part(w: number, h: number, d: number, color: number, x: number, y: number, z: number): THREE.Mesh {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
   m.position.set(x, y, z);
-  m.rotation.x = rx;
   return m;
 }
-function tube(r: number, len: number, color: number, x: number, y: number, z: number): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8), mat(color));
+/** tubo OCO ao longo de Z (sem tampas: dá para ver através) */
+function hollow(r: number, len: number, color: number, x: number, y: number, z: number): THREE.Mesh {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 12, 1, true), mat(color));
   m.rotation.x = Math.PI / 2;
   m.position.set(x, y, z);
   return m;
 }
-
-interface GunModel {
-  group: THREE.Group;
-  /** altura (no espaço da arma) da linha de mira: a mira de ferro passa por aqui */
-  sightY: number;
-  /** z (espaço da arma) da massa de mira traseira */
-  rearZ: number;
-  /** meshes da mira de ferro, escondidos quando há mira óptica */
-  irons: THREE.Object3D[];
-  muzzleZ: number;
+function ringMesh(r: number, color: number, x: number, y: number, z: number, thick = 0.005): THREE.Mesh {
+  const m = new THREE.Mesh(new THREE.TorusGeometry(r, thick, 5, 16), mat(color));
+  m.position.set(x, y, z);
+  return m;
 }
 
-/** Arma + mira de ferro. A mira de ferro (alça + massa) fica exatamente em `sightY`, para o alinhamento ao mirar ser real. */
-function buildGun(cls: WeaponClass): GunModel {
-  const g = new THREE.Group();
-  const irons: THREE.Object3D[] = [];
-  let sightY = 0.085, rearZ = 0.02, frontZ = -0.5, muzzleZ = -0.7;
-  const addIron = (rz: number, fz: number, y: number) => {
-    // alça: dois pilares com vão; massa: pino fino
-    for (const sx of [-0.011, 0.011]) irons.push(part(0.008, 0.02, 0.014, DARK, sx, y - 0.01, rz));
-    irons.push(part(0.006, 0.026, 0.01, DARK, 0, y - 0.013, fz));
-    for (const o of irons.slice(-3)) g.add(o);
-  };
-  switch (cls) {
-    case 'pistol':
-      g.add(part(0.034, 0.05, 0.2, METAL, 0, 0.03, -0.08), part(0.032, 0.11, 0.045, DARK, 0, -0.035, 0.0, 0.15));
-      sightY = 0.062; rearZ = 0.0; frontZ = -0.17; muzzleZ = -0.2;
-      break;
-    case 'smg':
-      g.add(part(0.05, 0.1, 0.34, METAL, 0, 0.01, -0.12), tube(0.014, 0.16, DARK, 0, 0.02, -0.36), part(0.034, 0.18, 0.05, DARK, 0, -0.11, -0.14), part(0.04, 0.07, 0.17, DARK, 0, 0, 0.13), part(0.034, 0.1, 0.045, DARK, 0, -0.08, 0.01, 0.2));
-      sightY = 0.075; rearZ = 0.0; frontZ = -0.3; muzzleZ = -0.45;
-      break;
-    case 'shotgun':
-      g.add(part(0.05, 0.08, 0.36, METAL, 0, 0.01, -0.1), tube(0.018, 0.42, DARK, 0, 0.03, -0.48), tube(0.016, 0.3, DARK, 0, -0.01, -0.42), part(0.055, 0.05, 0.16, WOOD, 0, -0.01, -0.4), part(0.045, 0.1, 0.24, WOOD, 0, -0.02, 0.2, -0.12));
-      sightY = 0.085; rearZ = -0.05; frontZ = -0.68; muzzleZ = -0.7;
-      break;
-    case 'sniper':
-      g.add(part(0.05, 0.08, 0.5, WOOD, 0, 0, -0.14), tube(0.013, 0.56, DARK, 0, 0.02, -0.66), part(0.045, 0.11, 0.26, WOOD, 0, -0.02, 0.24, -0.1), part(0.03, 0.08, 0.05, DARK, 0, -0.07, -0.1));
-      // luneta embutida (sem mira óptica comprada)
-      g.add(tube(0.026, 0.28, 0x16181a, 0, 0.1, -0.12), part(0.012, 0.03, 0.02, DARK, 0, 0.06, -0.12));
-      sightY = 0.1; rearZ = -0.12; frontZ = -0.12; muzzleZ = -0.95;
-      break;
-    default:
-      g.add(part(0.05, 0.09, 0.46, METAL, 0, 0.01, -0.14), tube(0.013, 0.28, DARK, 0, 0.02, -0.5), part(0.045, 0.1, 0.22, DARK, 0, -0.01, 0.2), part(0.035, 0.16, 0.065, DARK, 0, -0.1, -0.15, 0.25), part(0.034, 0.1, 0.045, DARK, 0, -0.08, 0.02, 0.2), part(0.055, 0.06, 0.2, 0x4a4f54, 0, 0.0, -0.36));
-      sightY = 0.085; rearZ = 0.02; frontZ = -0.52; muzzleZ = -0.65;
-  }
-  if (cls !== 'sniper') addIron(rearZ, frontZ, sightY);
-  return { group: g, sightY, rearZ, irons, muzzleZ };
-}
-
-/** Mira óptica: moldura oca (dá para ver através) com ponto/retículo no centro exato da linha de mira. */
-function buildOptic(it: Item, centerY: number): THREE.Group {
+/** Mira óptica: moldura/tubo OCOS (a visão passa pelo meio) com ponto/retículo no centro exato da linha de mira. */
+function buildOptic(it: Item, centerY: number, z: number): THREE.Group {
   const g = new THREE.Group();
   const s = it.sight!;
-  const z = -0.08;
   if (s.kind === 'reddot' || s.kind === 'holo') {
     const w = s.kind === 'holo' ? 0.05 : 0.04, h = s.kind === 'holo' ? 0.042 : 0.034, t = 0.0035;
     g.add(part(w + t * 2, t, 0.035, DARK, 0, centerY + h / 2, z), part(w + t * 2, t, 0.035, DARK, 0, centerY - h / 2, z));
@@ -90,23 +47,38 @@ function buildOptic(it: Item, centerY: number): THREE.Group {
       g.add(ring, dot);
     }
   } else {
-    // luneta: tubo com aro; enquanto mira a visão passa para o desenho da luneta (overlay)
+    // luneta: tubo aberto com aros. Antes era um cilindro fechado e tapava a tela (ficava tudo preto).
+    // Em 2x a visão continua livre pelo meio; de 4x para cima entra o desenho da luneta (overlay).
     const len = s.zoom < 0.2 ? 0.3 : s.zoom < 0.3 ? 0.24 : 0.17;
-    g.add(tube(0.027, len, 0x15171a, 0, centerY, z));
-    g.add(tube(0.034, 0.03, 0x0e0f10, 0, centerY, z - len / 2 + 0.01), tube(0.031, 0.025, 0x0e0f10, 0, centerY, z + len / 2 - 0.01));
-    g.add(part(0.022, 0.02, 0.07, DARK, 0, centerY - 0.036, z));
+    const r = s.zoom < 0.3 ? 0.028 : 0.024;
+    g.add(hollow(r, len, 0x15171a, 0, centerY, z));
+    g.add(hollow(r + 0.007, 0.04, 0x0e0f10, 0, centerY, z - len / 2 + 0.015), hollow(r + 0.005, 0.035, 0x0e0f10, 0, centerY, z + len / 2 - 0.012));
+    g.add(ringMesh(r + 0.007, 0x0b0b0c, 0, centerY, z - len / 2 - 0.004, 0.006), ringMesh(r + 0.005, 0x0b0b0c, 0, centerY, z + len / 2 + 0.004, 0.006));
+    g.add(part(0.022, 0.022, 0.07, DARK, 0, centerY - r - 0.012, z)); // base de montagem
+    if (s.zoom >= 0.3) {
+      // retículo fino dentro da luneta de 2x
+      const glow = new THREE.MeshBasicMaterial({ color: 0x111111, fog: false });
+      const h = new THREE.Mesh(new THREE.BoxGeometry(r * 1.8, 0.0008, 0.0008), glow);
+      const v = new THREE.Mesh(new THREE.BoxGeometry(0.0008, r * 1.8, 0.0008), glow);
+      h.position.set(0, centerY, z - len / 2 + 0.01); v.position.copy(h.position);
+      g.add(h, v);
+    }
   }
   return g;
 }
 
-/** Braços e arma em primeira pessoa, presos à câmera. */
+/** Braços e arma em primeira pessoa, presos à câmera. Cada arma da loja tem o seu próprio modelo. */
 export class ViewModel {
   readonly group = new THREE.Group();
-  private gun: GunModel | null = null;
+  private gun: THREE.Group | null = null;
+  private model: GunModel | null = null;
+  private ironsM: THREE.Mesh | null = null;
+  private scopeM: THREE.Mesh | null = null;
   private optic: THREE.Group | null = null;
   private armL: THREE.Mesh;
   private armR: THREE.Mesh;
   private cls: WeaponClass | '' = '';
+  private weaponId = '';
   private sightId = '';
   private kick = 0;
   private bob = 0;
@@ -114,6 +86,7 @@ export class ViewModel {
   private swayX = 0; private swayY = 0;
   private dip = 0;
   private sightY = 0.085;
+  private rearZ = 0.02;
   muzzle = new THREE.Vector3();
 
   constructor(camera: THREE.Camera, sleeve: number) {
@@ -137,29 +110,42 @@ export class ViewModel {
     (this.armR.material as THREE.MeshLambertMaterial).color.setHex(color);
   }
 
-  /** troca de arma/mira; `sight` é o item de mira comprado (ou undefined = mira de ferro) */
-  setWeapon(cls: WeaponClass, sight?: Item) {
+  /** troca de arma/mira; `sight` é o item de mira comprado (ou undefined = mira de ferro / luneta da própria arma) */
+  setWeapon(item: Item, sight?: Item) {
+    const cls = item.weapon!.cls;
     const sid = cls === 'pistol' ? '' : sight?.id ?? '';
-    if (cls === this.cls && sid === this.sightId) return;
-    if (cls !== this.cls) {
+    if (item.id === this.weaponId && sid === this.sightId) return;
+    if (item.id !== this.weaponId) {
+      this.weaponId = item.id;
       this.cls = cls;
-      if (this.gun) this.group.remove(this.gun.group);
-      this.gun = buildGun(cls);
-      this.gun.group.scale.setScalar(SCALE);
-      this.group.add(this.gun.group);
+      if (this.gun) this.group.remove(this.gun);
+      const gm = gunModel(item.id);
+      this.model = gm;
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(gm.body, GUN_MAT));
+      this.ironsM = gm.irons ? new THREE.Mesh(gm.irons, GUN_MAT) : null;
+      this.scopeM = gm.scopeGeo ? new THREE.Mesh(gm.scopeGeo, GUN_MAT) : null;
+      if (this.ironsM) g.add(this.ironsM);
+      if (this.scopeM) g.add(this.scopeM);
+      g.scale.setScalar(SCALE);
+      this.group.add(g);
+      this.gun = g;
       this.dip = 1;
     }
     this.sightId = sid;
-    const gm = this.gun!;
-    if (this.optic) { gm.group.remove(this.optic); this.optic = null; }
-    this.sightY = gm.sightY;
+    const gm = this.model!;
+    if (this.optic) { this.gun!.remove(this.optic); this.optic = null; }
     const optical = !!sight?.sight && cls !== 'pistol';
-    for (const o of gm.irons) o.visible = !optical;
+    if (this.ironsM) this.ironsM.visible = !optical;
+    if (this.scopeM) this.scopeM.visible = !optical;
+    this.sightY = gm.sightY;
+    this.rearZ = gm.rearZ;
     if (optical) {
-      const cy = cls === 'sniper' ? gm.sightY : gm.sightY + 0.045;
-      this.optic = buildOptic(sight!, cy);
-      gm.group.add(this.optic);
+      const cy = gm.topY + 0.048, z = gm.rearZ - 0.06;
+      this.optic = buildOptic(sight!, cy, z);
+      this.gun!.add(this.optic);
       this.sightY = cy;
+      this.rearZ = z;
     }
   }
 
@@ -167,9 +153,8 @@ export class ViewModel {
 
   update(dt: number, speed: number, onGround: boolean, ads: boolean, reloading: boolean, sprinting: boolean, dyaw: number, dpitch: number, visible: boolean) {
     this.group.visible = visible;
-    if (!visible || !this.gun) return;
-    const gm = this.gun;
-    const g = gm.group;
+    if (!visible || !this.gun || !this.model) return;
+    const g = this.gun;
     this.kick = Math.max(0, this.kick - dt * 8 * (this.kick + 0.25));
     this.ads += ((ads && !reloading && !sprinting ? 1 : 0) - this.ads) * Math.min(1, dt * 12);
     this.dip += ((reloading ? 1 : 0) - this.dip) * Math.min(1, dt * (reloading ? 10 : 6));
@@ -183,7 +168,7 @@ export class ViewModel {
     // posição de quadril
     const hipX = 0.16, hipY = -0.17 + (this.cls === 'pistol' ? 0.02 : 0), hipZ = -0.56;
     // posição de mira: a linha de mira (alça→massa/ponto) passa EXATAMENTE pelo centro da tela (0,0)
-    const adsX = 0, adsY = -this.sightY * SCALE, adsZ = -0.27 - gm.rearZ * SCALE;
+    const adsX = 0, adsY = -this.sightY * SCALE, adsZ = -0.27 - this.rearZ * SCALE;
     g.position.set(
       hipX + (adsX - hipX) * a + Math.sin(this.bob) * 0.012 * amp + this.swayX,
       hipY + (adsY - hipY) * a + Math.abs(Math.cos(this.bob)) * 0.012 * amp - this.dip * 0.22 + this.swayY - spr * 0.1,
@@ -199,7 +184,7 @@ export class ViewModel {
     // luneta de muito aumento: a visão vira overlay, esconde arma e braços
     const hideAll = a > 0.85 && this.scoped;
     g.visible = !hideAll; this.armR.visible = !hideAll; this.armL.visible = !hideAll;
-    this.muzzle.set(g.position.x, g.position.y + 0.02, g.position.z + gm.muzzleZ * SCALE);
+    this.muzzle.set(g.position.x, g.position.y + 0.02, g.position.z + this.model.muzzleZ * SCALE);
   }
 
   /** true quando o aumento é grande o bastante para usar o overlay de luneta */

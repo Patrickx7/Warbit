@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
   BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD, BTN2_SECONDARY, BTN2_USE, BTN3_FOB, BTN3_PRONE, BTN_BACK, BTN_CROUCH,
-  BTN_FIRE, BTN_FWD, BTN_JUMP, BTN_LEFT, BTN_RIGHT, BTN_SPRINT, BoxKind, DT, ITEMS, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, MSG_SNAPSHOT,
+  BTN_FIRE, BTN_FWD, BTN_JUMP, BTN_LEFT, BTN_RIGHT, BTN_SPRINT, BoxKind, DT, ITEMS, ITEM_BY_ID, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, MSG_SNAPSHOT,
   REVIVE_RANGE, SPRINT_FLAG_SPEED, TEAM_NAMES, TICK_RATE, World, aimDir, buildLoadout, decodeSnapshot, encodeInput, eyeHeight, maskHas,
   newMoveState, stepMove, whereIs,
   type ClientMsg, type EntityState, type Loadout, type MoveState, type OwnState, type RosterEntry, type ServerMsg, type Snapshot, type Zone,
@@ -11,6 +11,7 @@ import { Fx } from './render/fx';
 import { GameScene } from './render/scene';
 import { GUN_KIND, Soldiers, TEAM_LOOK, type SoldierPose } from './render/soldiers';
 import { SoldierPreview } from './render/preview';
+import { WEAPON_ITEMS, gunModel } from './render/guns';
 import { ViewModel } from './render/viewmodel';
 import { UI, esc, type MapDot, type MapFob } from './ui';
 
@@ -90,7 +91,9 @@ class Game {
   connect(name: string) {
     this.name = name;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${location.host}/ws`);
+    // online: o cliente (Vercel) e o servidor do jogo ficam em hosts diferentes; VITE_WS_URL aponta para o servidor (wss://...)
+    const envUrl = (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_WS_URL;
+    const ws = new WebSocket(envUrl || `${proto}://${location.host}/ws`);
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
     $('status').textContent = 'Conectando…';
@@ -521,7 +524,7 @@ class Game {
       const downed = st.life === LIFE_DOWNED;
       pose.id = id; pose.x = e.x; pose.y = e.y; pose.z = e.z; pose.yaw = e.yaw; pose.pitch = e.pitch;
       pose.crouch = st.crouch; pose.prone = st.prone; pose.sprint = st.sprint; pose.downed = downed; pose.team = st.team; pose.armor = st.armor; pose.helmet = st.helmet; pose.pack = st.pack;
-      pose.gun = GUN_KIND[ITEMS[st.weapon]?.weapon?.cls ?? 'rifle'] ?? 0;
+      pose.gun = st.weapon;
       pose.dist = Math.hypot(e.x - cam.position.x, e.z - cam.position.z);
       pose.marker = ally ? 1 : st.marked ? 2 : 0;
       pose.camo = this.world.inBush(e.x, e.z) ? 1 : 0;
@@ -541,7 +544,7 @@ class Game {
     const speed = Math.hypot(p.vx, p.vz);
     const reloading = !!this.own && (this.own.flags & 1) !== 0;
     const sprintingNow = alive && !p.prone && !p.crouch && speed > SPRINT_FLAG_SPEED && this.keys.has('ShiftLeft');
-    if (w) this.vm.setWeapon(w.cls, this.slot === 0 ? this.loadout?.sight : undefined);
+    if (it?.weapon) this.vm.setWeapon(it, this.slot === 0 ? this.loadout?.sight : undefined);
     this.vm.scoped = zoomEff <= 0.3;
     this.vm.update(dt, speed, p.onGround, ads, reloading, sprintingNow, this.yaw - this.lastYaw, this.pitch - this.lastPitch, alive && !!w);
     this.lastYaw = this.yaw; this.lastPitch = this.pitch;
@@ -637,6 +640,7 @@ class Game {
 }
 
 // ---------- modo benchmark: 100 soldados animados, sem rede (?bench=1) ----------
+const BENCH_GUNS = ITEMS.filter((x) => x.weapon).map((x) => x.idx);
 function runBench() {
   const world = new World(20261112);
   const gs = new GameScene(canvas, world);
@@ -650,7 +654,32 @@ function runBench() {
   const perf = $('perf');
   perf.style.fontSize = '15px'; perf.style.color = '#fff';
   const camR = Number(new URLSearchParams(location.search).get('r')) || 34;
-  const focus = new URLSearchParams(location.search).has('bush');
+  const bq = new URLSearchParams(location.search);
+  let vmRef: ViewModel | null = null, vmZoom = 1;
+  if (bq.has('vm')) {
+    const gunItem = ITEM_BY_ID[bq.get('gun') ?? 'fuzil_basico'];
+    const sightItem = bq.get('sight') ? ITEM_BY_ID[bq.get('sight')!] : undefined;
+    vmRef = new ViewModel(gs.camera, TEAM_LOOK[0].jacket);
+    vmRef.setWeapon(gunItem, sightItem);
+    vmZoom = sightItem?.sight ? sightItem.sight.zoom : gunItem.weapon!.zoom;
+  }
+  // ?bench=1&guns=1: catálogo lateral de todas as armas, no céu, para conferir os modelos
+  const gunsMode = bq.has('guns');
+  const gunsAnchor = { x: c.x, y: world.heightAt(c.x, c.z) + 80, z: c.z };
+  if (gunsMode) {
+    const mt = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+    WEAPON_ITEMS.forEach((it, k) => {
+      const gm = gunModel(it.id);
+      const holder = new THREE.Group();
+      holder.add(new THREE.Mesh(gm.body, mt));
+      if (gm.scopeGeo) holder.add(new THREE.Mesh(gm.scopeGeo, mt));
+      if (gm.irons) holder.add(new THREE.Mesh(gm.irons, mt));
+      holder.rotation.y = Math.PI / 2; // cano para a esquerda
+      holder.position.set(gunsAnchor.x + ((k % 6) - 2.5) * 1.45, gunsAnchor.y + (1 - Math.floor(k / 6)) * 0.62, gunsAnchor.z);
+      gs.scene.add(holder);
+    });
+  }
+  const focus = bq.has('bush');
   const bd = Number(new URLSearchParams(location.search).get('bd')) || 7; // distância da câmera à moita no modo foco
   const bu = [...world.bushes].sort((p, q) => Math.hypot(p.x - c.x, p.z - c.z) - Math.hypot(q.x - c.x, q.z - c.z))[0];
   let last = performance.now(), fps = 60, minFps = 999, frames = 0;
@@ -662,7 +691,18 @@ function runBench() {
     const t = now / 1000;
     const a = t * 0.15;
     const cy = world.heightAt(c.x, c.z);
-    if (focus) {
+    if (vmRef) {
+      // modo "arma na mão": câmera parada, arma em 1ª pessoa, com ou sem mira (?ads=1)
+      gs.camera.position.set(c.x + 30, cy + 1.62, c.z + 30);
+      gs.camera.lookAt(c.x, cy + 1.2, c.z);
+      vmRef.scoped = vmZoom <= 0.3;
+      vmRef.update(dt, 0, true, bq.has('ads'), false, false, 0, 0, true);
+      gs.camera.fov = BASE_FOV * (1 - (1 - vmZoom) * vmRef.adsAmount);
+      gs.camera.updateProjectionMatrix();
+    } else if (gunsMode) {
+      gs.camera.position.set(gunsAnchor.x, gunsAnchor.y, gunsAnchor.z + (Number(bq.get('d')) || 7.5));
+      gs.camera.lookAt(gunsAnchor.x, gunsAnchor.y, gunsAnchor.z);
+    } else if (focus) {
       // câmera parada olhando uma moita: um soldado deitado e um agachado dentro, um em pé do lado de fora
       gs.camera.position.set(bu.x + bd, bu.y + 1.2, bu.z + bd * 0.4);
       gs.camera.lookAt(bu.x, bu.y + 0.9, bu.z);
@@ -678,7 +718,7 @@ function runBench() {
       const x = c.x + Math.cos(ang) * ring, z = c.z + Math.sin(ang) * ring;
       pose.id = i; pose.x = x; pose.z = z; pose.y = world.groundAt(x, z, world.heightAt(x, z) + 0.3, 0.4);
       pose.yaw = (i % 2 ? -ang : -ang + Math.PI); pose.pitch = Math.sin(t + i) * 0.2;
-      pose.crouch = i % 9 === 0; pose.prone = i % 13 === 0; pose.sprint = sp > 5; pose.downed = i % 23 === 0; pose.team = i % 3; pose.armor = i % 5; pose.helmet = (i * 3) % 5; pose.pack = i % 4; pose.gun = i % 4;
+      pose.crouch = i % 9 === 0; pose.prone = i % 13 === 0; pose.sprint = sp > 5; pose.downed = i % 23 === 0; pose.team = i % 3; pose.armor = i % 5; pose.helmet = (i * 3) % 5; pose.pack = i % 4; pose.gun = BENCH_GUNS[i % BENCH_GUNS.length];
       pose.marker = i % 3 === 0 ? 1 : i % 17 === 0 ? 2 : 0;
       pose.camo = 0;
       if (focus && i < 3) {

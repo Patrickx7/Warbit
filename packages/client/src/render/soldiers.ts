@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { MAX_PLAYERS } from '@warbit/shared';
+import { ITEMS, MAX_PLAYERS } from '@warbit/shared';
+import { gunGeometryFull } from './guns';
 
 // =====================================================================
 // Geometria do soldado — tudo gerado em código, sem arquivo de modelo.
@@ -161,22 +162,6 @@ function shinGeo() {
     rb(0.115, 0.025, 0.28, 0x0a0a0a, T(0, -0.475, -0.05), 0.006), // sola
   ]);
 }
-const barrel = (r: number, len: number, z: number, y = 0.02) => paint(new THREE.CylinderGeometry(r, r, len, 6), 0x34383c, TR(0, y, z - len / 2, Math.PI / 2));
-const METAL = 0x34383c, WOOD = 0x6e4f33;
-function gunGeo(kind: number) {
-  const box = (w: number, h: number, d: number, color: number, m: THREE.Matrix4) => rb(w, h, d, color, m, 0.006);
-  switch (kind) {
-    case 1:
-      return merge([box(0.05, 0.1, 0.34, METAL, T(0, 0.01, -0.1)), barrel(0.014, 0.16, -0.27), box(0.035, 0.17, 0.05, 0x222222, T(0, -0.11, -0.12)), box(0.04, 0.07, 0.16, 0x2a2a2a, T(0, 0, 0.14)), box(0.035, 0.1, 0.045, 0x222222, T(0, -0.08, 0.02))]);
-    case 2:
-      return merge([box(0.05, 0.08, 0.5, WOOD, T(0, 0, -0.12)), barrel(0.013, 0.5, -0.37), box(0.045, 0.11, 0.26, WOOD, T(0, -0.02, 0.25)), paint(new THREE.CylinderGeometry(0.024, 0.024, 0.24, 8), 0x1b1b1b, TR(0, 0.085, -0.1, Math.PI / 2)), box(0.03, 0.08, 0.05, 0x222222, T(0, -0.07, -0.08))]);
-    case 3:
-      return merge([box(0.035, 0.05, 0.19, METAL, T(0, 0.03, -0.07)), box(0.034, 0.11, 0.045, 0x222222, T(0, -0.03, 0.0))]);
-    default:
-      return merge([box(0.05, 0.09, 0.44, METAL, T(0, 0.01, -0.12)), barrel(0.013, 0.26, -0.34), box(0.045, 0.1, 0.22, 0x2a2a2a, T(0, -0.01, 0.2)), box(0.035, 0.15, 0.065, 0x222222, TR(0, -0.1, -0.13, 0.25)), box(0.035, 0.1, 0.045, 0x222222, T(0, -0.08, 0.03)), box(0.03, 0.05, 0.1, 0x1b1b1b, T(0, 0.08, -0.1))]);
-  }
-}
-
 // =====================================================================
 // Visual de cada time: uniforme próprio + braçadeira na cor do time
 // =====================================================================
@@ -195,7 +180,9 @@ export interface SoldierPose {
   x: number; y: number; z: number;
   yaw: number; pitch: number;
   crouch: boolean; prone: boolean; sprint: boolean; downed: boolean;
-  team: number; armor: number; helmet: number; pack: number; gun: number;
+  team: number; armor: number; helmet: number; pack: number;
+  /** índice do item da arma (ITEMS[i]): cada arma tem o seu modelo */
+  gun: number;
   marker: number; // 0 nenhum, 1 aliado, 2 inimigo marcado
   camo: number;   // 0..1: dentro de uma moita
   dist: number;
@@ -225,11 +212,10 @@ export class Soldiers {
   private packMs: THREE.InstancedMesh[] = [];
   private upperM: THREE.InstancedMesh; private bandM: THREE.InstancedMesh; private foreM: THREE.InstancedMesh;
   private thighM: THREE.InstancedMesh; private shinM: THREE.InstancedMesh;
-  private guns: THREE.InstancedMesh[] = [];
+  private guns = new Map<number, { im: THREE.InstancedMesh; n: number }>();
   private markerM: THREE.InstancedMesh;
   private all: THREE.InstancedMesh[] = [];
   private n = 0;
-  private gunN = [0, 0, 0, 0];
   private packN = [0, 0, 0];
   private markN = 0;
   private phase = new Float32Array(MAX_PLAYERS);
@@ -240,7 +226,10 @@ export class Soldiers {
   private seen = new Uint8Array(MAX_PLAYERS);
   triangles = 0;
 
+  private max: number;
+
   constructor(max = MAX_PLAYERS) {
+    this.max = max;
     const mk = (g: THREE.BufferGeometry, count: number, material: THREE.Material = this.mat, perSoldier = 1) => {
       const im = new THREE.InstancedMesh(g, material, count);
       im.frustumCulled = false;
@@ -264,15 +253,33 @@ export class Soldiers {
     this.foreM = mk(forearmGeo(), max * 2, this.mat, 2);
     this.thighM = mk(thighGeo(), max * 2, this.mat, 2);
     this.shinM = mk(shinGeo(), max * 2, this.mat, 2);
-    for (let k = 0; k < 4; k++) this.guns.push(mk(gunGeo(k), max, this.mat, 0.25));
     this.markerM = mk(new THREE.OctahedronGeometry(0.11, 0), max, new THREE.MeshBasicMaterial({ fog: false }), 0);
   }
 
-  get drawCalls() { return this.all.length; }
+  /** uma InstancedMesh por arma, criada só quando alguém a usa (a loja tem ~20 modelos diferentes) */
+  private gunMesh(idx: number) {
+    let g = this.guns.get(idx);
+    if (!g) {
+      const id = ITEMS[idx]?.id ?? 'fuzil_basico';
+      const im = new THREE.InstancedMesh(gunGeometryFull(id), this.mat, this.max);
+      im.frustumCulled = false;
+      im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      im.setColorAt(0, col.setHex(0xffffff));
+      im.count = 0;
+      this.group.add(im);
+      g = { im, n: 0 };
+      this.guns.set(idx, g);
+    }
+    return g;
+  }
+
+  /** draw calls reais: só as partes com algum soldado */
+  get drawCalls() { return this.all.length + this.guns.size; }
 
   begin() {
     this.n = 0; this.markN = 0;
-    this.gunN.fill(0); this.packN.fill(0);
+    for (const g of this.guns.values()) g.n = 0;
+    this.packN.fill(0);
   }
 
   add(p: SoldierPose, dt: number) {
@@ -382,8 +389,9 @@ export class Soldiers {
 
     // arma
     if (!p.downed && !(far && p.dist > 260)) {
-      const g = this.guns[p.gun];
-      const gi = this.gunN[p.gun]++;
+      const gm = this.gunMesh(p.gun);
+      const g = gm.im;
+      const gi = gm.n++;
       if (p.prone) tmp.multiplyMatrices(torso, local(0.11, 0.62, 0.02, Math.PI / 2, 0, 0));
       else if (relaxed) tmp.multiplyMatrices(torso, local(0.02, 0.36, -0.26, 0.85, 0.35, 0.7)); // atravessada no peito
       else tmp.multiplyMatrices(torso, local(0.13, 0.4, -0.33, aim * 0.75 + lean, 0, 0));
@@ -406,7 +414,7 @@ export class Soldiers {
     set(this.hipsM, n); set(this.torsoM, n); set(this.headM, n); set(this.helmetM, n); set(this.vestM, n);
     for (let t = 0; t < 3; t++) set(this.packMs[t], this.packN[t]);
     set(this.upperM, n * 2); set(this.bandM, n); set(this.foreM, n * 2); set(this.thighM, n * 2); set(this.shinM, n * 2);
-    for (let k = 0; k < 4; k++) set(this.guns[k], this.gunN[k]);
+    for (const g of this.guns.values()) { set(g.im, g.n); g.im.visible = g.n > 0; }
     set(this.markerM, this.markN);
   }
 

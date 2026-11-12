@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { Soldiers, GUN_KIND, type SoldierPose } from './soldiers';
+import { Soldiers, type SoldierPose } from './soldiers';
 
-export interface PreviewLook { armor: number; helmet: number; pack: number; gunCls: string }
+export interface PreviewLook { armor: number; helmet: number; pack: number; gun: number }
 
 /** Soldado girando na loja: mostra na hora como fica o equipamento (colete, capacete, mochila) e o uniforme do time. */
 export class SoldierPreview {
@@ -29,7 +29,7 @@ export class SoldierPreview {
   set(look: PreviewLook, team: number) {
     const p = this.pose;
     p.team = team; p.armor = look.armor; p.helmet = look.helmet; p.pack = look.pack;
-    p.gun = GUN_KIND[look.gunCls] ?? 0;
+    p.gun = look.gun;
   }
 
   render(now: number) {
