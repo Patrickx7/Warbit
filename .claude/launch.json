@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "warbit-server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "server"],
+      "port": 8080
+    },
+    {
+      "name": "warbit-client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "client"],
+      "port": 5173
+    }
+  ]
+}
