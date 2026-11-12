@@ -646,7 +646,7 @@ function runBench() {
   const gs = new GameScene(canvas, world);
   const soldiers = new Soldiers();
   gs.scene.add(soldiers.group);
-  const c = world.czCandidates[0];
+  const c = world.czCandidates[Number(new URLSearchParams(location.search).get('at')) || 0]; // &at=1 industrial, 2 fazenda, 3 posto
   gs.setZones({ x: c.x, z: c.z, r: 150 }, { x: c.x + 20, z: c.z, r: 30 });
   $('menu').classList.add('hidden');
   $('hud').classList.remove('hidden');

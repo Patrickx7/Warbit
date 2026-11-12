@@ -1,10 +1,10 @@
 // Teste de carga: conecta N clientes WebSocket reais, compra o kit grátis, anda e atira.
-// Uso: npm run loadtest            (100 clientes, 30 s, servidor em localhost:8080)
+// Uso: npm run loadtest            (60 clientes, 30 s, servidor em localhost:8080)
 //      CLIENTS=50 SECONDS=60 URL=ws://host:8080/ws npm run loadtest
 import WebSocket from 'ws';
 import { BTN_FIRE, BTN_FWD, BTN_SPRINT, encodeInput } from '@warbit/shared';
 
-const N = Number(process.env.CLIENTS ?? 100);
+const N = Number(process.env.CLIENTS ?? 60);
 const SECONDS = Number(process.env.SECONDS ?? 30);
 const URL = process.env.URL ?? 'ws://localhost:8080/ws';
 const HTTP = URL.replace(/^ws/, 'http').replace(/\/ws$/, '');

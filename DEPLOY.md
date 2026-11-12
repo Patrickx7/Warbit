@@ -37,7 +37,7 @@ O `Dockerfile` compila o cliente e o servidor entrega a página **e** o jogo no 
 
 ## Limites (leia antes de divulgar)
 
-- Um servidor Node comporta **uma partida de 100 jogadores** (o teste de carga fechou 100 conexões com ~1 ms de tick). Para várias partidas ao mesmo tempo é preciso rodar mais servidores.
+- Um servidor Node comporta **uma partida de 60 jogadores** (o teste de carga fechou 100 conexões com ~1 ms de tick). Para várias partidas ao mesmo tempo é preciso rodar mais servidores.
 - Jogadores são **convidados**: o cash e o XP ficam ligados ao navegador (token). Quem limpar os dados do navegador perde o perfil.
 - Não há proteção contra trapaça além do servidor ser quem decide tudo (movimento, tiro, dinheiro).
 - A latência depende de onde o servidor fica: escolha uma região perto dos jogadores (para o Brasil, São Paulo).

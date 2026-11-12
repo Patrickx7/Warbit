@@ -95,7 +95,7 @@ describe('protocolo', () => {
     expect(d.yaw).toBeCloseTo(1.25, 5); expect(d.pitch).toBeCloseTo(-0.5, 5); expect(d.renderTick).toBe(123456);
   });
   it('snapshot vai e volta', () => {
-    const alive = new Uint8Array(ALIVE_MASK_BYTES); maskSet(alive, 5); maskSet(alive, 99);
+    const alive = new Uint8Array(ALIVE_MASK_BYTES); maskSet(alive, 5); maskSet(alive, 59);
     const buf = encodeSnapshot({
       tick: 900, ack: 42, alive,
       own: { x: 10.5, y: 3.25, z: 700, vx: 1, vy: -2, vz: 3, hp: 87, life: LIFE_ALIVE, ammo: 30, reserve: 120, flags: 3, slot: 1, stamina: 0.5, stanceCd: 0.25 },
@@ -103,7 +103,7 @@ describe('protocolo', () => {
     });
     const s = decodeSnapshot(new DataView(buf));
     expect(s.tick).toBe(900); expect(s.ack).toBe(42); expect(s.own.hp).toBe(87); expect(s.own.reserve).toBe(120); expect(s.own.slot).toBe(1);
-    expect(maskHas(s.alive, 5)).toBe(true); expect(maskHas(s.alive, 6)).toBe(false); expect(maskHas(s.alive, 99)).toBe(true);
+    expect(maskHas(s.alive, 5)).toBe(true); expect(maskHas(s.alive, 6)).toBe(false); expect(maskHas(s.alive, 59)).toBe(true);
     const e = s.ents[0];
     expect(e.id).toBe(5); expect(e.x).toBeCloseTo(812.4, 1); expect(e.y).toBeCloseTo(17.3, 1); expect(e.z).toBeCloseTo(44.9, 1);
     expect(e.yaw).toBeCloseTo(2.1, 1); expect(e.pitch).toBeCloseTo(-0.4, 1);
@@ -194,6 +194,18 @@ describe('moitas', () => {
     expect(world.bushBlocks(b.x - 30, y, b.z, b.x + 30, y, b.z)).toBe(true); // no meio do caminho
     expect(world.bushBlocks(b.x, y, b.z, b.x + 30, y, b.z)).toBe(false); // observador dentro dela
     expect(world.bushBlocks(b.x - 30, y, b.z, b.x, y, b.z)).toBe(false); // alvo dentro dela
+  });
+});
+
+describe('área industrial', () => {
+  it('tem pouco mato e bastante cobertura (contêineres, barreiras, muretas, caminhões)', () => {
+    const I = world.pois[1];
+    const bushes = world.bushes.filter((b) => Math.hypot(b.x - I.x, b.z - I.z) < I.r + 15).length;
+    const cover = world.boxes.filter((b) => (b.kind === 9 || b.kind === 2) && Math.hypot((b.x0 + b.x1) / 2 - I.x, (b.z0 + b.z1) / 2 - I.z) < 100).length;
+    const crates = world.boxes.filter((b) => b.kind === 1 && Math.hypot((b.x0 + b.x1) / 2 - I.x, (b.z0 + b.z1) / 2 - I.z) < 100).length;
+    console.log(`industrial: ${bushes} moitas, ${cover} contêineres/muros/barreiras, ${crates} caixotes`);
+    expect(bushes).toBeLessThan(25);
+    expect(cover).toBeGreaterThan(45);
   });
 });
 

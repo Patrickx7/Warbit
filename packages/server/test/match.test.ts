@@ -66,13 +66,13 @@ describe('partida', () => {
     expect(m.spawn(p, [])).toBeNull(); // kit gratuito
   });
 
-  it('roda 100 bots por 60 s de jogo sem erro e alguém pontua', () => {
+  it('roda 60 bots por 80 s de jogo sem erro e alguém pontua', () => {
     const m = new Match(world, null);
     const t0 = performance.now();
     for (let i = 0; i < 60 * TICK_RATE + 20 * TICK_RATE; i++) m.step();
     const ms = (performance.now() - t0) / (80 * TICK_RATE);
-    expect(m.players.filter((p) => p.life === LIFE_ALIVE).length).toBeGreaterThan(40);
-    expect(ms).toBeLessThan(10); // tick médio < 10 ms com 100 entidades
-    console.log(`tick médio com 100 bots: ${ms.toFixed(3)} ms; placar`, m.scores.map((s) => s.toFixed(1)));
+    expect(m.players.filter((p) => p.life === LIFE_ALIVE).length).toBeGreaterThan(25);
+    expect(ms).toBeLessThan(10); // tick médio < 10 ms com 60 entidades
+    console.log(`tick médio com 60 bots: ${ms.toFixed(3)} ms; placar`, m.scores.map((s) => s.toFixed(1)));
   }, 60000);
 });

@@ -414,7 +414,7 @@ export class World {
     // escritório de dois andares (sólido)
     this.block(I.x - 50, I.z + 38, 14, 10, 6.5, BoxKind.Building, 0xa9a39a, 4);
     // pilhas de contêineres
-    for (let k = 0, tries = 0; k < 16 && tries < 200; tries++) {
+    for (let k = 0, tries = 0; k < 14 && tries < 300; tries++) {
       const a = rnd() * Math.PI * 2, r = 12 + rnd() * 78;
       const cx = I.x + Math.cos(a) * r, cz = I.z + Math.sin(a) * r;
       const alongX = rnd() < 0.5;
@@ -432,10 +432,65 @@ export class World {
       if (this.areaFree(cx - 2.5, cz - 2.5, cx + 2.5, cz + 2.5, 1)) this.block(cx, cz, 5, 5, 6, BoxKind.Building, 0xc9c6bd, 1);
     }
     // caixotes e pallets
-    for (let k = 0; k < 24; k++) {
+    for (let k = 0; k < 40; k++) {
       const a = rnd() * Math.PI * 2, r = 6 + rnd() * 85;
       const cx = I.x + Math.cos(a) * r, cz = I.z + Math.sin(a) * r;
       if (this.areaFree(cx - 0.8, cz - 0.8, cx + 0.8, cz + 0.8, 1)) this.block(cx, cz, 1.5, 1.5, 1.2 + (rnd() < 0.3 ? 1.2 : 0), BoxKind.Crate, 0x7a5c38, 1);
+    }
+    // Cobertura no lugar de mato: o pátio industrial tem poucas moitas, então há obstáculos para se proteger.
+    // 1) fileiras de contêineres com corredores de 4 m entre eles
+    for (let k = 0, tries = 0; k < 6 && tries < 60; tries++) {
+      const a = rnd() * Math.PI * 2, r = 15 + rnd() * 62;
+      const bx = I.x + Math.cos(a) * r, bz = I.z + Math.sin(a) * r;
+      const alongX = rnd() < 0.5;
+      let placed = 0;
+      for (let j = 0; j < 4; j++) {
+        const cx = alongX ? bx + j * 10.6 : bx, cz = alongX ? bz : bz + j * 10.6;
+        const w = alongX ? 6.1 : 2.5, d = alongX ? 2.5 : 6.1;
+        if (Math.hypot(cx - I.x, cz - I.z) > 88 || this.roadDist(cx, cz) < 7) continue;
+        if (!this.areaFree(cx - w / 2, cz - d / 2, cx + w / 2, cz + d / 2, 1.5)) continue;
+        const g = this.heightAt(cx, cz);
+        this.addBox({ id: 0, x0: cx - w / 2, x1: cx + w / 2, z0: cz - d / 2, z1: cz + d / 2, y0: g - 1, y1: g + 2.6, kind: BoxKind.Container, color: CONTAINER_COLORS[Math.floor(rnd() * CONTAINER_COLORS.length)] });
+        placed++;
+      }
+      if (placed >= 2) k++;
+    }
+    // 2) barreiras de concreto (cobertura na altura da cintura)
+    for (let k = 0, tries = 0; k < 26 && tries < 500; tries++) {
+      const a = rnd() * Math.PI * 2, r = 8 + rnd() * 82;
+      const cx = I.x + Math.cos(a) * r, cz = I.z + Math.sin(a) * r;
+      const alongX = rnd() < 0.5;
+      const w = alongX ? 2.8 : 0.7, d = alongX ? 0.7 : 2.8;
+      if (this.roadDist(cx, cz) < 6 || !this.areaFree(cx - w / 2, cz - d / 2, cx + w / 2, cz + d / 2, 1.2)) continue;
+      this.block(cx, cz, w, d, 1.05, BoxKind.Wall, 0x9a9a92, 1);
+      k++;
+    }
+    // 3) muretas em L (dá para agachar atrás e espiar pelos cantos)
+    for (let k = 0, tries = 0; k < 10 && tries < 200; tries++) {
+      const a = rnd() * Math.PI * 2, r = 10 + rnd() * 78;
+      const cx = I.x + Math.cos(a) * r, cz = I.z + Math.sin(a) * r;
+      const sx = rnd() < 0.5 ? 1 : -1, sz = rnd() < 0.5 ? 1 : -1;
+      if (this.roadDist(cx, cz) < 6 || !this.areaFree(cx - 3.6, cz - 3.6, cx + 3.6, cz + 3.6, 1)) continue;
+      this.block(cx, cz, 5.5, 0.5, 1.2, BoxKind.Wall, 0x8f8a80, 1);
+      this.block(cx + sx * 2.5, cz + sz * 2, 0.5, 4.5, 1.2, BoxKind.Wall, 0x8f8a80, 1);
+      k++;
+    }
+    // 4) caminhões e empilhadeiras paradas
+    for (let k = 0, tries = 0; k < 7 && tries < 200; tries++) {
+      const a = rnd() * Math.PI * 2, r = 12 + rnd() * 74;
+      const cx = I.x + Math.cos(a) * r, cz = I.z + Math.sin(a) * r;
+      const alongX = rnd() < 0.5;
+      const w = alongX ? 8 : 2.6, d = alongX ? 2.6 : 8;
+      if (this.roadDist(cx, cz) < 7 || !this.areaFree(cx - w / 2, cz - d / 2, cx + w / 2, cz + d / 2, 1.5)) continue;
+      const g = this.heightAt(cx, cz);
+      const col = CAR_COLORS[Math.floor(rnd() * CAR_COLORS.length)];
+      this.addBox({ id: 0, x0: cx - w / 2, x1: cx + w / 2, z0: cz - d / 2, z1: cz + d / 2, y0: g - 1, y1: g + 3.0, kind: BoxKind.Container, color: 0xc9c4b5 }); // carroceria
+      const cabW = alongX ? 2.2 : 2.6, cabD = alongX ? 2.6 : 2.2;
+      const cabX = alongX ? cx + w / 2 + cabW / 2 : cx, cabZ = alongX ? cz : cz + d / 2 + cabD / 2;
+      if (this.areaFree(cabX - cabW / 2, cabZ - cabD / 2, cabX + cabW / 2, cabZ + cabD / 2, 0.3)) {
+        this.addBox({ id: 0, x0: cabX - cabW / 2, x1: cabX + cabW / 2, z0: cabZ - cabD / 2, z1: cabZ + cabD / 2, y0: g - 1, y1: g + 2.4, kind: BoxKind.Crate, color: col });
+      }
+      k++;
     }
     // cerca alta com portões (não dá para pular)
     const H = 96;
@@ -639,6 +694,9 @@ export class World {
       if (x < 6 || z < 6 || x > WORLD_SIZE - 6 || z > WORLD_SIZE - 6) return;
       if (this.roadDist(x, z) < 4.2) return;
       if (this.bases.some((b) => Math.hypot(b.x - x, b.z - z) < 50)) return;
+      // área industrial: só algumas moitas (a cobertura vem de contêineres, barreiras e muretas)
+      const ind = this.pois[1];
+      if (Math.hypot(x - ind.x, z - ind.z) < ind.r + 15 && rnd() > 0.06) return;
       // grandes o bastante para um soldado entrar e se esconder
       const r = (1.4 + rnd() * 1.1) * big;
       if (!this.areaFree(x - r * 0.7, z - r * 0.7, x + r * 0.7, z + r * 0.7, 0.2)) return;

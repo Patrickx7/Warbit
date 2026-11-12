@@ -1,6 +1,6 @@
 import {
   BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD, BTN2_USE, BTN3_FOB, BTN_CROUCH, BTN_FIRE, BTN_FWD, BTN_JUMP,
-  BTN_LEFT, BTN_RIGHT, BTN_SPRINT, BTN3_PRONE, eyeHeight, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, PRESETS, buildLoadout,
+  BTN_LEFT, BTN_RIGHT, BTN_SPRINT, BTN3_PRONE, WORLD_SIZE, eyeHeight, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, PRESETS, buildLoadout,
 } from '@warbit/shared';
 import type { Match } from './Match';
 import type { Player } from './Player';
@@ -48,6 +48,7 @@ export class BotBrain {
   lookYaw = 0;
   seq = 0;
   hotPref = Math.random();
+  hasFinal = false; finalX = 0; finalZ = 0; // destino final enquanto vai por um ponto de flanco
 
   constructor(readonly id: number) {}
 
@@ -61,7 +62,7 @@ export class BotBrain {
       // bots guardam uma reserva para não quebrar
       if (r.loadout.cost > 0 && p.cash - r.loadout.cost < 400 && items !== tries[3]) continue;
       if (!m.spawn(p, items)) {
-        this.aimYaw = p.yaw; this.aimPitch = 0; this.targetId = -1; this.goalUntil = 0; this.reviveId = -1; this.holding = false;
+        this.aimYaw = p.yaw; this.aimPitch = 0; this.targetId = -1; this.goalUntil = 0; this.reviveId = -1; this.holding = false; this.hasFinal = false;
         this.stuckX = p.ms.x; this.stuckZ = p.ms.z; this.stuckAt = m.tick;
         return;
       }
@@ -162,12 +163,21 @@ export class BotBrain {
     const tick = m.tick;
     if (this.pickRevive(m, p)) return;
     this.reviveId = -1;
+    // indo por um ponto de flanco: chegou (ou demorou demais)? segue para o destino final
+    if (this.hasFinal) {
+      const near = (this.goalX - p.ms.x) ** 2 + (this.goalZ - p.ms.z) ** 2 < 100;
+      if (near || tick >= this.goalUntil) {
+        this.goalX = this.finalX; this.goalZ = this.finalZ; this.hasFinal = false; this.holding = false;
+        this.goalUntil = tick + 30 * (15 + Math.floor(Math.random() * 25));
+      }
+      return;
+    }
     const reached = (this.goalX - p.ms.x) ** 2 + (this.goalZ - p.ms.z) ** 2 < 4;
     if (reached) this.holding = true;
     if (tick < this.goalUntil && !(this.holding && tick > this.goalUntil - 30)) return;
-    // escolhe cobertura dentro da zona: perto da Hot Zone ou no lado do próprio time
+    // 75% dos bots disputam a Hot Zone (cobertura mais perto dela); o resto segura o restante da Control Zone
     const cz = m.cz, hz = m.hz, base = m.world.bases[p.team];
-    const wantHot = this.hotPref < 0.55;
+    const wantHot = this.hotPref < 0.75;
     let best: { x: number; z: number } | null = null, bestScore = Infinity;
     for (let i = 0; i < 14 && m.cover.length; i++) {
       const c = m.cover[Math.floor(Math.random() * m.cover.length)];
@@ -177,12 +187,26 @@ export class BotBrain {
       if (score < bestScore) { bestScore = score; best = c; }
     }
     if (!best) {
-      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * cz.r * 0.8;
-      best = { x: cz.x + Math.cos(a) * r, z: cz.z + Math.sin(a) * r };
+      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * (wantHot ? hz.r : cz.r) * 0.8;
+      const c = wantHot ? hz : cz;
+      best = { x: c.x + Math.cos(a) * r, z: c.z + Math.sin(a) * r };
     }
-    this.goalX = best.x; this.goalZ = best.z;
     this.holding = false;
-    this.goalUntil = tick + 30 * (12 + Math.floor(Math.random() * 25));
+    // Quem está longe da zona contorna: passa antes por um ponto de flanco num lado aleatório,
+    // então a ofensiva chega de várias direções e não todo mundo pela mesma estrada.
+    const dzone = Math.hypot(p.ms.x - cz.x, p.ms.z - cz.z);
+    if (dzone > cz.r + 80 && Math.random() < 0.7) {
+      const side = Math.random() < 0.5 ? 1 : -1;
+      const ang = Math.atan2(p.ms.z - cz.z, p.ms.x - cz.x) + side * (0.5 + Math.random() * 1.2);
+      const R = cz.r + 50 + Math.random() * 70;
+      this.finalX = best.x; this.finalZ = best.z; this.hasFinal = true;
+      this.goalX = Math.max(25, Math.min(WORLD_SIZE - 25, cz.x + Math.cos(ang) * R));
+      this.goalZ = Math.max(25, Math.min(WORLD_SIZE - 25, cz.z + Math.sin(ang) * R));
+      this.goalUntil = tick + 30 * 70;
+    } else {
+      this.goalX = best.x; this.goalZ = best.z;
+      this.goalUntil = tick + 30 * (12 + Math.floor(Math.random() * 25));
+    }
   }
 
   // ---------- navegação ----------

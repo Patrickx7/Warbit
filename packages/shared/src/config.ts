@@ -5,7 +5,7 @@ export const DT = 1 / TICK_RATE;
 export const SNAPSHOT_EVERY = 2; // 1 snapshot a cada 2 ticks = 15 Hz
 export const FAR_SNAPSHOT_EVERY = 4; // entidades longe: 1 a cada 4 snapshots
 export const NEAR_DIST = 220; // metros: dentro disso, taxa cheia
-export const MAX_PLAYERS = 100;
+export const MAX_PLAYERS = 60; // jogadores por partida (20 por time); bots completam as vagas
 export const TEAM_COUNT = 3;
 export const TEAM_NAMES = ['Azul', 'Vermelho', 'Verde'] as const;
 export const TEAM_COLORS = [0x3b82f6, 0xef4444, 0x22c55e] as const;
