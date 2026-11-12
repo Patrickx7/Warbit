@@ -29,19 +29,19 @@ describe('partida', () => {
     const mate = m.players.find((q) => q.team === p.team && q !== p)!;
     expect(p.cash).toBe(10000);
 
-    expect(m.spawn(p, ['fuzil_padrao', 'blind_1'], 'base')).toBeNull();
+    expect(m.spawn(p, ['fuzil_padrao', 'blind_1'])).toBeNull();
     expect(p.life).toBe(LIFE_ALIVE);
     expect(p.cash).toBe(10000 - 800 - 200); // desconto de recruta 50%
-    expect(m.spawn(p, [], 'base')).not.toBeNull(); // já em campo
+    expect(m.spawn(p, [])).not.toBeNull(); // já em campo
 
     // cai e é revivido: mantém o loadout
     m.damage(p, 500, null, 'teste', false);
     expect(p.life).toBe(LIFE_DOWNED);
-    mate.bot = false; mate.cash = 5000;
-    expect(m.spawn(mate, ['reanimador'], 'base')).toBeNull();
+    mate.bot = false; mate.cash = 5000; mate.respawnAt = 0;
+    expect(m.spawn(mate, ['reanimador'])).toBeNull();
     mate.ms.x = p.ms.x + 1; mate.ms.z = p.ms.z; mate.ms.y = p.ms.y;
     for (let i = 0; i < 4 * TICK_RATE && p.life === LIFE_DOWNED; i++) {
-      m.processInput(mate, { seq: i + 1, buttons: 0, buttons2: BTN2_USE, yaw: 0, pitch: 0, renderTick: 0 });
+      m.processInput(mate, { seq: i + 1, buttons: 0, buttons2: BTN2_USE, buttons3: 0, yaw: 0, pitch: 0, renderTick: 0 });
       mate.ms.x = p.ms.x + 1; mate.ms.z = p.ms.z;
     }
     expect(p.life).toBe(LIFE_ALIVE);
@@ -62,8 +62,8 @@ describe('partida', () => {
     const m = new Match(world, null, { bots: false });
     const p = m.join(conn(), 'Pobre')!;
     p.cash = 100;
-    expect(m.spawn(p, ['fuzil_padrao'], 'base')).toBe('Saldo insuficiente');
-    expect(m.spawn(p, [], 'base')).toBeNull(); // kit gratuito
+    expect(m.spawn(p, ['fuzil_padrao'])).toBe('Saldo insuficiente');
+    expect(m.spawn(p, [])).toBeNull(); // kit gratuito
   });
 
   it('roda 100 bots por 60 s de jogo sem erro e alguém pontua', () => {

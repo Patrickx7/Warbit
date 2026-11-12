@@ -1,12 +1,12 @@
 import {
   ALIVE_MASK_BYTES, ARMOR_REDUCTION, BASE_MAGS, BOT_START_CASH, BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD,
-  BTN2_SECONDARY, BTN2_USE, BTN_FIRE, BTN_SPRINT, BUILD_USES, BoxKind, CROUCH_EYE_HEIGHT, CROUCH_HEIGHT, CZ_RADIUS, DEFIB_SECONDS, DOWNED_SECONDS, DT,
-  EYE_HEIGHT, FAR_SNAPSHOT_EVERY, FORWARD_SPAWN_DIST, FRAG_COUNT, HP_REGEN_CAP, HP_REGEN_DELAY, HP_REGEN_RATE, HZ_MOVE_SECONDS,
-  HZ_RADIUS, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, MATCH_END_SECONDS, MAX_HP, MAX_PLAYERS, MEDBAG_USES, NADE_DAMAGE, NADE_FUSE,
-  NADE_RADIUS, NADE_SPEED, NEAR_DIST, PLAYER_HEIGHT, PLAYER_RADIUS, PRESENCE_REWARD_SECONDS, REVIVE_RANGE, REVIVE_SECONDS,
-  SCORE_TO_WIN, SNAPSHOT_EVERY, TEAM_COUNT, TEAM_NAMES, TICK_RATE, WARMUP_SECONDS, aimDir, buildLoadout, computePresence,
-  encodeSnapshot, maskSet, newMoveState, pointsFor, rewardFor, stepMove, stepNade, whereIs,
-  type BoxMsg, type ClientMsg, type EntityState, type InputMsg, type Nade, type RewardKind, type RosterEntry, type ServerMsg,
+  BTN2_SECONDARY, BTN2_USE, BTN3_FOB, BTN_FIRE, BTN_SPRINT, BUILD_USES, BoxKind, CROUCH_HEIGHT, CZ_RADIUS, DEFIB_SECONDS,
+  DOWNED_SECONDS, DT, FAR_SNAPSHOT_EVERY, FOB_HP, FOB_MIN_BASE_DIST, FOB_RADIUS, FRAG_COUNT, HP_REGEN_CAP, HP_REGEN_DELAY,
+  HP_REGEN_RATE, HZ_MOVE_SECONDS, HZ_RADIUS, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, MATCH_END_SECONDS, MAX_HP, MAX_PLAYERS, MEDBAG_USES,
+  NADE_DAMAGE, NADE_FUSE, NADE_RADIUS, NADE_SPEED, NEAR_DIST, PLAYER_HEIGHT, PLAYER_RADIUS, PRESENCE_REWARD_SECONDS, RESPAWN_SECONDS,
+  REVIVE_RANGE, REVIVE_SECONDS, SCORE_TO_WIN, SNAPSHOT_EVERY, SPRINT_FLAG_SPEED, TEAM_COUNT, TEAM_NAMES, TICK_RATE, WARMUP_SECONDS,
+  aimDir, buildLoadout, computePresence, encodeSnapshot, eyeHeight, maskSet, newMoveState, pointsFor, rewardFor, stepMove, stepNade, whereIs,
+  type Box, type BoxMsg, type ClientMsg, type EntityState, type InputMsg, type Nade, type RewardKind, type RosterEntry, type ServerMsg,
   type WeaponStats, type World, type Zone, type ZoneWhere,
 } from '@warbit/shared';
 import type { ProfileStore } from '../db';
@@ -45,6 +45,10 @@ function raySphere(ox: number, oy: number, oz: number, dx: number, dy: number, d
   return t >= 0 ? t : c < 0 ? 0 : -1;
 }
 
+export interface Fob { team: number; x: number; z: number; y: number; hp: number; ids: number[]; owner: number }
+
+const COVER_KINDS: number[] = [BoxKind.House, BoxKind.Wall, BoxKind.Crate, BoxKind.Container, BoxKind.Building, BoxKind.Rock, BoxKind.Fence];
+
 export class Match {
   readonly players: Player[] = [];
   tick = 0;
@@ -57,13 +61,14 @@ export class Match {
   cz: Zone = { x: 0, z: 0, r: CZ_RADIUS };
   hz: Zone = { x: 0, z: 0, r: HZ_RADIUS };
   hzMoveAt = 0;
-  spawns: { x: number; z: number }[] = [];
   nades: Nade[] = [];
   sandbags: number[] = [];
+  fobs: (Fob | null)[] = [null, null, null];
+  /** pontos de cobertura dentro da Control Zone (para os bots) */
+  cover: { x: number; z: number }[] = [];
   private nextNade = 1;
   private snapCount = 0;
   private ents: (EntityState | null)[] = new Array(MAX_PLAYERS).fill(null);
-  /** preenche vagas vazias com bots */
   fillBots = true;
 
   constructor(readonly world: World, readonly store: ProfileStore | null, opts?: { bots?: boolean }) {
@@ -90,6 +95,7 @@ export class Match {
     return this.players.filter((p) => !p.bot || this.fillBots).map((p) => ({ id: p.id, name: p.name, team: p.team, bot: p.bot, level: p.level }));
   }
   private active(p: Player) { return !p.bot || this.fillBots; }
+  private toolsMsg(p: Player) { return { frag: p.frags, medbag: p.medbags, build: p.builds, fob: p.hasFob ? 1 : 0 }; }
 
   private resetAsBot(p: Player) {
     p.bot = true; p.conn = null; p.profile = null;
@@ -104,15 +110,10 @@ export class Match {
   // ---------- rodada ----------
   private newRound() {
     const w = this.world;
-    const c = w.czCandidates[Math.floor(this.rnd() * w.czCandidates.length)];
+    const k = Math.floor(this.rnd() * w.czCandidates.length);
+    const c = w.czCandidates[k];
     this.cz = { x: c.x, z: c.z, r: CZ_RADIUS };
     this.moveHotZone();
-    this.spawns = w.bases.map((b) => {
-      const dx = b.x - c.x, dz = b.z - c.z;
-      const d = Math.hypot(dx, dz);
-      const k = Math.min(d - 40, CZ_RADIUS + FORWARD_SPAWN_DIST) / d;
-      return { x: c.x + dx * k, z: c.z + dz * k };
-    });
     this.scores = [0, 0, 0];
     this.presence = [0, 0, 0];
     this.control = -1;
@@ -120,22 +121,49 @@ export class Match {
     this.phase = 'warmup';
     this.phaseEnd = this.tick + WARMUP_SECONDS * TICK_RATE;
     this.nades.length = 0;
-    if (this.sandbags.length) {
-      for (const id of this.sandbags) this.world.removeBox(id);
-      this.broadcast({ t: 'build', remove: this.sandbags.slice() });
-      this.sandbags.length = 0;
+    const remove: number[] = [...this.sandbags];
+    for (let t = 0; t < 3; t++) { const f = this.fobs[t]; if (f) remove.push(...f.ids); this.fobs[t] = null; }
+    if (remove.length) {
+      for (const id of remove) this.world.removeBox(id);
+      this.broadcast({ t: 'build', remove });
     }
+    this.sandbags.length = 0;
+    this.computeCover();
     for (const p of this.players) {
       if (p.life !== LIFE_NONE) {
         // devolve o valor do loadout de quem estava em campo
         if (p.loadout) { p.cash += p.loadout.cost; p.profileDirty = true; p.saveDirty = true; }
         p.life = LIFE_NONE; p.loadout = null; p.lifeProfit = 0;
-        this.sendTo(p, { t: 'life', life: LIFE_NONE, reason: 'Nova partida' });
+        this.sendTo(p, { t: 'life', life: LIFE_NONE, reason: 'Nova partida', wait: 0 });
       }
-      p.points = 0; p.kills = p.bot ? 0 : p.kills; p.presenceAcc = 0; p.markedUntil = 0;
-      if (p.bot) { p.deaths = 0; p.respawnAt = this.tick + 30 + Math.floor(this.rnd() * 240); }
+      p.points = 0; p.presenceAcc = 0; p.markedUntil = 0; p.respawnAt = 0;
+      if (p.bot) { p.deaths = 0; p.kills = 0; p.respawnAt = this.tick + 30 + Math.floor(this.rnd() * 240); }
     }
+    this.broadcast({ t: 'msg', text: `Control Zone: ${w.pois[k]?.name ?? ''}` });
     this.sendState();
+  }
+
+  private computeCover() {
+    const cz = this.cz;
+    const pts: { x: number; z: number }[] = [];
+    const seen = new Set<number>();
+    for (const b of this.world.boxes) {
+      if (!COVER_KINDS.includes(b.kind) || seen.has(b.id)) continue;
+      const cx = (b.x0 + b.x1) / 2, cz2 = (b.z0 + b.z1) / 2;
+      if ((cx - cz.x) ** 2 + (cz2 - cz.z) ** 2 > (cz.r - 5) ** 2) continue;
+      if (b.y1 - this.world.heightAt(cx, cz2) < 0.9) continue;
+      seen.add(b.id);
+      // pontos ao lado da caixa, um pouco afastados
+      const opts = [
+        { x: b.x0 - 1.1, z: cz2 }, { x: b.x1 + 1.1, z: cz2 }, { x: cx, z: b.z0 - 1.1 }, { x: cx, z: b.z1 + 1.1 },
+      ];
+      for (const o of opts) {
+        if (this.rnd() < 0.5) continue;
+        if (this.world.blockedAt(o.x, o.z)) continue;
+        pts.push(o);
+      }
+    }
+    this.cover = pts;
   }
 
   private moveHotZone() {
@@ -178,10 +206,12 @@ export class Match {
     const profile = this.store ? this.store.loadOrCreate(token, clean) : { token: 'mem', name: clean, cash: 10000, xp: 0, kills: 0, deaths: 0, wins: 0 };
     p.bot = false; p.brain = null; p.conn = conn; p.profile = profile; p.name = clean;
     p.cash = profile.cash; p.xp = profile.xp; p.kills = 0; p.deaths = 0; p.points = 0; p.lifeProfit = 0;
-    p.life = LIFE_NONE; p.loadout = null; p.inputs.length = 0; p.ack = 0; p.budget = 0;
+    p.life = LIFE_NONE; p.loadout = null; p.inputs.length = 0; p.ack = 0; p.budget = 0; p.respawnAt = 0;
     const b = this.world.bases[p.team];
     p.ms = newMoveState(b.x, this.world.heightAt(b.x, b.z), b.z);
-    const builds: BoxMsg[] = this.sandbags.map((id) => this.world.boxes.find((x) => x.id === id)!).filter(Boolean);
+    const builds: BoxMsg[] = [];
+    for (const id of this.sandbags) { const bx = this.world.boxes.find((x) => x.id === id); if (bx) builds.push(bx); }
+    for (const f of this.fobs) if (f) for (const id of f.ids) { const bx = this.world.boxes.find((x) => x.id === id); if (bx) builds.push(bx); }
     this.sendTo(p, { t: 'welcome', id: p.id, team: p.team, seed: this.world.seed, token: profile.token, tick: this.tick, roster: this.roster(), builds });
     this.sendProfile(p);
     this.sendTo(p, this.stateMsg());
@@ -211,7 +241,7 @@ export class Match {
     switch (m.t) {
       case 'spawn': {
         if (!Array.isArray(m.items) || m.items.length > 12) return;
-        const err = this.spawn(p, m.items.map(String), m.where === 'base' ? 'base' : 'forward');
+        const err = this.spawn(p, m.items.map(String));
         if (err) this.sendTo(p, { t: 'shopError', error: err });
         break;
       }
@@ -232,9 +262,11 @@ export class Match {
   }
 
   // ---------- spawn / loja ----------
-  spawn(p: Player, items: string[], where: 'base' | 'forward'): string | null {
+  /** Todo mundo nasce na base do time e vai a pé até a zona. */
+  spawn(p: Player, items: string[]): string | null {
     if (p.life !== LIFE_NONE) return 'Você já está em campo';
     if (this.phase === 'end') return 'Aguarde a próxima partida';
+    if (!p.bot && this.tick < p.respawnAt) return `Aguarde ${Math.ceil((p.respawnAt - this.tick) / TICK_RATE)}s para renascer`;
     const res = buildLoadout(items, p.bot ? 99 : p.level, p.cash);
     if (!res.ok) return res.error;
     const lo = res.loadout;
@@ -246,6 +278,7 @@ export class Match {
     const pw = lo.primary.weapon!, sw = lo.secondary.weapon!;
     p.ammo = [pw.mag, sw.mag];
     p.reserve = [pw.mag * mags, sw.mag * 3];
+    p.maxReserve = [p.reserve[0], p.reserve[1]];
     p.slot = 0; p.reloadEnd = 0; p.nextFire = 0; p.simTime = 0;
     p.frags = lo.tools.some((t) => t.tool === 'frag') ? FRAG_COUNT : 0;
     p.medbags = lo.tools.some((t) => t.tool === 'medbag') ? MEDBAG_USES : 0;
@@ -253,13 +286,18 @@ export class Match {
     p.hasRevive = lo.tools.some((t) => t.tool === 'revive');
     p.hasDefib = lo.tools.some((t) => t.tool === 'defib');
     p.hasMark = lo.tools.some((t) => t.tool === 'mark');
+    p.hasFob = lo.tools.some((t) => t.tool === 'fob');
     p.healReady = 0; p.markReady = 0;
-    const c = where === 'base' ? this.world.bases[p.team] : this.spawns[p.team];
-    const a = this.rnd() * Math.PI * 2, r = 3 + this.rnd() * 9;
-    const pos = { x: c.x + Math.cos(a) * r, z: c.z + Math.sin(a) * r };
+    const c = this.world.bases[p.team];
+    const pos = { x: c.x, z: c.z };
+    for (let tries = 0; tries < 12; tries++) {
+      const a = this.rnd() * Math.PI * 2, r = 4 + this.rnd() * 14;
+      pos.x = c.x + Math.cos(a) * r; pos.z = c.z + Math.sin(a) * r;
+      if (!this.world.blockedAt(pos.x, pos.z)) break;
+    }
     const gy = this.world.heightAt(pos.x, pos.z);
     this.world.collide(pos, gy, PLAYER_HEIGHT, PLAYER_RADIUS + 0.2);
-    p.ms = newMoveState(pos.x, this.world.heightAt(pos.x, pos.z), pos.z);
+    p.ms = newMoveState(pos.x, this.world.groundAt(pos.x, pos.z, gy + 0.2, PLAYER_RADIUS), pos.z);
     p.ms.onGround = true;
     p.yaw = Math.atan2(-(this.cz.x - pos.x), -(this.cz.z - pos.z));
     p.pitch = 0;
@@ -267,11 +305,12 @@ export class Match {
     p.life = LIFE_ALIVE;
     p.damagers.clear();
     p.lastDamageTick = -99999;
+    p.lastAttacker = -1;
     p.markedUntil = 0;
     p.presenceAcc = 0;
     p.inputs.length = 0;
     p.prevB = 0; p.prevB2 = 0;
-    this.sendTo(p, { t: 'life', life: LIFE_ALIVE, tools: { frag: p.frags, medbag: p.medbags, build: p.builds } });
+    this.sendTo(p, { t: 'life', life: LIFE_ALIVE, tools: this.toolsMsg(p) });
     return null;
   }
 
@@ -287,7 +326,7 @@ export class Match {
   step() {
     const tick = ++this.tick;
 
-    if (this.phase === 'warmup' && tick >= this.phaseEnd) { this.phase = 'live'; this.broadcast({ t: 'msg', text: 'Partida valendo! Dominem a Control Zone.' }); this.sendState(); }
+    if (this.phase === 'warmup' && tick >= this.phaseEnd) { this.phase = 'live'; this.broadcast({ t: 'msg', text: 'Partida valendo! Avancem e dominem a Control Zone.' }); this.sendState(); }
     else if (this.phase === 'end' && tick >= this.phaseEnd) this.newRound();
 
     for (const p of this.players) {
@@ -308,7 +347,6 @@ export class Match {
       }
     }
 
-    // granadas
     for (let i = this.nades.length - 1; i >= 0; i--) {
       const n = this.nades[i];
       if (stepNade(n, this.world, DT)) {
@@ -317,11 +355,10 @@ export class Match {
       }
     }
 
-    // histórico para lag compensation
     const hi = tick % HIST;
     for (const p of this.players) {
       p.hx[hi] = p.ms.x; p.hy[hi] = p.ms.y; p.hz[hi] = p.ms.z;
-      p.hc[hi] = p.life === LIFE_NONE ? 0 : p.life === LIFE_DOWNED ? 3 : p.ms.crouch ? 2 : 1;
+      p.hc[hi] = p.life === LIFE_NONE ? 0 : p.life === LIFE_DOWNED ? 3 : p.ms.prone ? 4 : p.ms.crouch ? 2 : 1;
     }
 
     if (tick % TICK_RATE === 0) this.everySecond();
@@ -337,6 +374,19 @@ export class Match {
       if (p.life !== LIFE_ALIVE) continue;
       alive.push(p);
       if (p.hp < HP_REGEN_CAP && tick - p.lastDamageTick > HP_REGEN_DELAY * TICK_RATE) p.hp = Math.min(HP_REGEN_CAP, p.hp + HP_REGEN_RATE);
+    }
+    // FOB: aliados por perto se curam e recebem munição
+    for (const f of this.fobs) {
+      if (!f) continue;
+      for (const p of alive) {
+        if (p.team !== f.team || (p.ms.x - f.x) ** 2 + (p.ms.z - f.z) ** 2 > FOB_RADIUS * FOB_RADIUS) continue;
+        if (p.hp < MAX_HP) p.hp = Math.min(MAX_HP, p.hp + 4);
+        if (tick % (TICK_RATE * 6) === 0 && (p.reserve[0] < p.maxReserve[0] || p.reserve[1] < p.maxReserve[1])) {
+          p.reserve[0] = p.maxReserve[0]; p.reserve[1] = p.maxReserve[1];
+          const owner = this.players[f.owner];
+          if (owner && owner !== p && owner.team === f.team && owner.life !== LIFE_NONE) this.award(owner, 'resupply');
+        }
+      }
     }
     this.presence = computePresence(alive.map((p) => ({ team: p.team, x: p.ms.x, z: p.ms.z })), this.cz, this.hz);
     if (this.phase === 'live') {
@@ -365,7 +415,9 @@ export class Match {
     return {
       t: 'state', phase: this.phase, timeLeft: Math.max(0, Math.ceil((this.phaseEnd - this.tick) / TICK_RATE)),
       scores: this.scores.map((s) => Math.round(s * 10) / 10), presence: this.presence, control: this.control,
-      cz: this.cz, hz: this.hz, hzIn: Math.max(0, Math.ceil((this.hzMoveAt - this.tick) / TICK_RATE)), spawns: this.spawns, winner: this.winner, counts,
+      cz: this.cz, hz: this.hz, hzIn: Math.max(0, Math.ceil((this.hzMoveAt - this.tick) / TICK_RATE)),
+      fobs: this.fobs.filter((f): f is Fob => !!f).map((f) => ({ team: f.team, x: f.x, z: f.z, hp: Math.round(f.hp) })),
+      winner: this.winner, counts,
     };
   }
   private sendState() { this.broadcast(this.stateMsg()); }
@@ -375,8 +427,8 @@ export class Match {
     p.yaw = inp.yaw; p.pitch = inp.pitch; p.renderTick = inp.renderTick; p.ack = inp.seq;
     if (p.life === LIFE_ALIVE && p.loadout) {
       const armor = p.loadout.armor?.armor ?? 0;
-      stepMove(p.ms, inp.buttons, inp.yaw, this.world, DT, armor >= 4 ? 0.92 : armor === 3 ? 0.96 : 1);
-      p.sprinting = (inp.buttons & BTN_SPRINT) !== 0 && Math.hypot(p.ms.vx, p.ms.vz) > 6;
+      stepMove(p.ms, inp.buttons, inp.yaw, this.world, DT, armor >= 4 ? 0.92 : armor === 3 ? 0.96 : 1, inp.buttons3);
+      p.sprinting = (inp.buttons & BTN_SPRINT) !== 0 && !p.ms.prone && !p.ms.crouch && Math.hypot(p.ms.vx, p.ms.vz) > SPRINT_FLAG_SPEED;
       p.simTime += DT;
       this.weapons(p, inp);
       this.tools(p, inp);
@@ -387,7 +439,7 @@ export class Match {
   private weapons(p: Player, inp: InputMsg) {
     const lo = p.loadout!;
     const slot = inp.buttons2 & BTN2_SECONDARY ? 1 : 0;
-    if (slot !== p.slot) { p.slot = slot; p.reloadEnd = 0; p.nextFire = Math.max(p.nextFire, p.simTime + 0.35); }
+    if (slot !== p.slot) { p.slot = slot; p.reloadEnd = 0; p.nextFire = Math.max(p.nextFire, p.simTime + 0.45); }
     const w = (slot === 0 ? lo.primary : lo.secondary).weapon!;
     if (p.reloadEnd > 0) {
       if (p.simTime < p.reloadEnd) return;
@@ -399,6 +451,8 @@ export class Match {
       p.reloadEnd = p.simTime + w.reload;
       return;
     }
+    // correndo não atira: a arma está baixa; leva um instante para levantar
+    if (p.sprinting) { p.nextFire = Math.max(p.nextFire, p.simTime + 0.25); return; }
     const fire = (inp.buttons & BTN_FIRE) !== 0;
     if (fire && (w.auto || !(p.prevB & BTN_FIRE)) && p.simTime >= p.nextFire && p.ammo[slot] > 0) {
       p.ammo[slot]--;
@@ -408,17 +462,18 @@ export class Match {
     }
   }
 
-  private eyeY(p: Player) { return p.ms.y + (p.ms.crouch ? CROUCH_EYE_HEIGHT : EYE_HEIGHT); }
+  eyeY(p: Player) { return p.ms.y + eyeHeight(p.ms); }
 
   private shoot(p: Player, w: WeaponStats, ads: boolean, weaponName: string) {
-    let spread = ads ? w.adsSpread : w.spread;
+    // sem mirar (botão direito) o tiro é bem impreciso: a ideia é obrigar a mirar
+    let spread = ads ? w.adsSpread : w.spread * 2.5;
     const speed = Math.hypot(p.ms.vx, p.ms.vz);
-    if (speed > 1.5) spread *= ads ? 1.5 : 1.7;
-    if (!p.ms.onGround) spread *= 2.5;
-    if (p.ms.crouch) spread *= 0.75;
+    if (speed > 1.2) spread *= ads ? 1.8 : 1.5;
+    if (!p.ms.onGround) spread *= 3;
+    if (p.ms.prone) spread *= 0.5;
+    else if (p.ms.crouch) spread *= 0.7;
     const ox = p.ms.x, oy = this.eyeY(p), oz = p.ms.z;
     const pellets = w.pellets ?? 1;
-    // tick visto pelo atirador (lag compensation); bots usam o presente
     let rt = p.bot ? -1 : Math.min(this.tick - 1, Math.max(this.tick - HIST + 2, p.renderTick));
     if (rt >= 0) rt %= HIST;
     let totalDmg = 0, anyHead = false, anyKill = false;
@@ -433,8 +488,22 @@ export class Match {
         if (e.team === p.team || e.life === LIFE_NONE) continue;
         let ex: number, ey: number, ez: number, st: number;
         if (rt >= 0 && e.hc[rt] !== 0) { ex = e.hx[rt]; ey = e.hy[rt]; ez = e.hz[rt]; st = e.hc[rt]; }
-        else { ex = e.ms.x; ey = e.ms.y; ez = e.ms.z; st = e.life === LIFE_DOWNED ? 3 : e.ms.crouch ? 2 : 1; }
-        // rejeição rápida: distância perpendicular ao raio
+        else { ex = e.ms.x; ey = e.ms.y; ez = e.ms.z; st = e.life === LIFE_DOWNED ? 3 : e.ms.prone ? 4 : e.ms.crouch ? 2 : 1; }
+        if (st === 4) {
+          // deitado: corpo comprido na direção em que ele olha (cabeça à frente, pés atrás)
+          const fx = -Math.sin(e.yaw), fz = -Math.cos(e.yaw);
+          const cxm = ex + fx * 0.35, czm = ez + fz * 0.35;
+          if ((cxm - ox) * dx + (czm - oz) * dz < -2) continue;
+          const th = raySphere(ox, oy, oz, dx, dy, dz, ex + fx * 1.13, ey + 0.3, ez + fz * 1.13, 0.18);
+          let tb = -1;
+          for (const f of [-0.4, 0, 0.4, 0.8]) {
+            const t = raySphere(ox, oy, oz, dx, dy, dz, ex + fx * f, ey + 0.27, ez + fz * f, 0.27);
+            if (t >= 0 && (tb < 0 || t < tb)) tb = t;
+          }
+          if (th >= 0 && th < best && (tb < 0 || th <= tb + 0.3)) { best = th; hit = e; head = true; }
+          else if (tb >= 0 && tb < best) { best = tb; hit = e; head = false; }
+          continue;
+        }
         const px = ex - ox, py = ey + 0.9 - oy, pz = ez - oz;
         const along = px * dx + py * dy + pz * dz;
         if (along < -1 || along > best + 1) continue;
@@ -472,7 +541,7 @@ export class Match {
     if (victim.life === LIFE_NONE || amount <= 0) return;
     victim.hp -= amount;
     victim.lastDamageTick = this.tick;
-    if (attacker && attacker !== victim) victim.damagers.set(attacker.id, this.tick);
+    if (attacker && attacker !== victim) { victim.damagers.set(attacker.id, this.tick); victim.lastAttacker = attacker.id; }
     if (victim.conn) this.sendTo(victim, { t: 'hurt', x: attacker ? attacker.ms.x : victim.ms.x, z: attacker ? attacker.ms.z : victim.ms.z, dmg: Math.round(amount) });
     if (victim.hp > 0) return;
     if (victim.life === LIFE_ALIVE) this.goDown(victim, attacker, weaponName, head);
@@ -515,13 +584,12 @@ export class Match {
     p.loadout = null; // morreu: perdeu o equipamento comprado
     p.lifeProfit = 0;
     p.profileDirty = true; p.saveDirty = true;
-    p.respawnAt = this.tick + (4 + Math.floor(this.rnd() * 5)) * TICK_RATE;
-    this.sendTo(p, { t: 'life', life: LIFE_NONE, reason });
+    p.respawnAt = this.tick + RESPAWN_SECONDS * TICK_RATE + (p.bot ? Math.floor(this.rnd() * 5 * TICK_RATE) : 0);
+    this.sendTo(p, { t: 'life', life: LIFE_NONE, reason, wait: RESPAWN_SECONDS });
   }
 
   private tools(p: Player, inp: InputMsg) {
     const b2 = inp.buttons2, edge = b2 & ~p.prevB2;
-    // reviver aliado caído (segurar E)
     if (b2 & BTN2_USE && (p.hasRevive || p.hasDefib)) {
       let best: Player | null = null, bd = REVIVE_RANGE * REVIVE_RANGE;
       for (const e of this.players) {
@@ -534,7 +602,7 @@ export class Match {
         if (best.reviveProg >= (p.hasDefib ? DEFIB_SECONDS : REVIVE_SECONDS)) {
           best.life = LIFE_ALIVE; best.hp = p.hasDefib ? MAX_HP : 40; best.lastDamageTick = this.tick; best.reviveProg = 0;
           best.inputs.length = 0;
-          this.sendTo(best, { t: 'life', life: LIFE_ALIVE, tools: { frag: best.frags, medbag: best.medbags, build: best.builds } });
+          this.sendTo(best, { t: 'life', life: LIFE_ALIVE, tools: this.toolsMsg(best) });
           this.sendTo(best, { t: 'msg', text: `${p.name} te reanimou — equipamento mantido!` });
           p.points += 5;
           this.award(p, 'revive');
@@ -547,7 +615,7 @@ export class Match {
       const n: Nade = { id: this.nextNade++, owner: p.id, x: p.ms.x + v3.x * 0.5, y: this.eyeY(p), z: p.ms.z + v3.z * 0.5, vx: v3.x * NADE_SPEED + p.ms.vx, vy: v3.y * NADE_SPEED, vz: v3.z * NADE_SPEED + p.ms.vz, fuse: NADE_FUSE };
       this.nades.push(n);
       this.broadcast({ t: 'nade', id: n.id, x: n.x, y: n.y, z: n.z, vx: n.vx, vy: n.vy, vz: n.vz, fuse: n.fuse });
-      this.sendTo(p, { t: 'life', life: LIFE_ALIVE, tools: { frag: p.frags, medbag: p.medbags, build: p.builds } });
+      this.sendTo(p, { t: 'life', life: LIFE_ALIVE, tools: this.toolsMsg(p) });
     }
     if (edge & BTN2_HEAL && p.medbags > 0 && p.simTime >= p.healReady) {
       let healed = 0, self = false;
@@ -560,20 +628,22 @@ export class Match {
       if (healed > 0 || self) {
         p.medbags--; p.healReady = p.simTime + 3;
         for (let i = 0; i < Math.min(healed, 4); i++) this.award(p, 'heal');
-        this.sendTo(p, { t: 'life', life: LIFE_ALIVE, tools: { frag: p.frags, medbag: p.medbags, build: p.builds } });
+        this.sendTo(p, { t: 'life', life: LIFE_ALIVE, tools: this.toolsMsg(p) });
       }
     }
     if (edge & BTN2_BUILD && p.builds > 0 && p.ms.onGround) this.buildSandbag(p);
     if (edge & BTN2_MARK && p.hasMark && p.simTime >= p.markReady) this.mark(p);
+    if (inp.buttons3 & BTN3_FOB && p.hasFob && p.ms.onGround) this.buildFob(p);
   }
 
   private buildSandbag(p: Player) {
     const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
     const cx = p.ms.x + fx * 1.9, cz = p.ms.z + fz * 1.9;
-    const alongX = Math.abs(fx) < Math.abs(fz); // parede perpendicular à direção em que o jogador olha
+    const alongX = Math.abs(fx) < Math.abs(fz);
     const hw = alongX ? 1.3 : 0.4, hd = alongX ? 0.4 : 1.3;
     const gy = this.world.heightAt(cx, cz);
     if (Math.abs(gy - p.ms.y) > 1.2) return;
+    if (!this.world.canBuild(cx - hw, cz - hd, cx + hw, cz + hd)) return;
     for (const e of this.players) {
       if (e.life === LIFE_NONE) continue;
       if (e.ms.x > cx - hw - 0.5 && e.ms.x < cx + hw + 0.5 && e.ms.z > cz - hd - 0.5 && e.ms.z < cz + hd + 0.5) return;
@@ -582,14 +652,65 @@ export class Match {
     this.sandbags.push(b.id);
     p.builds--;
     this.broadcast({ t: 'build', add: [b] });
-    if (this.sandbags.length > 80) {
+    if (this.sandbags.length > 120) {
       const old = this.sandbags.shift()!;
       this.world.removeBox(old);
       this.broadcast({ t: 'build', remove: [old] });
     }
     p.points += 1;
     this.award(p, 'build');
-    this.sendTo(p, { t: 'life', life: LIFE_ALIVE, tools: { frag: p.frags, medbag: p.medbags, build: p.builds } });
+    this.sendTo(p, { t: 'life', life: LIFE_ALIVE, tools: this.toolsMsg(p) });
+  }
+
+  /** FOB: caixa de suprimentos do time cercada por sacos de areia, à frente do jogador. */
+  buildFob(p: Player): boolean {
+    const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
+    const cx = p.ms.x + fx * 6, cz = p.ms.z + fz * 6;
+    const err = (t: string) => { this.sendTo(p, { t: 'msg', text: t }); p.hasFob = p.hasFob; return false; };
+    if (this.world.bases.some((b) => Math.hypot(b.x - cx, b.z - cz) < FOB_MIN_BASE_DIST)) return err('Longe demais da frente: monte a FOB mais perto da zona');
+    const R = 4.2;
+    if (!this.world.canBuild(cx - R, cz - R, cx + R, cz + R)) return err('Sem espaço aqui para a FOB');
+    const hs = [this.world.heightAt(cx - R, cz - R), this.world.heightAt(cx + R, cz - R), this.world.heightAt(cx - R, cz + R), this.world.heightAt(cx + R, cz + R)];
+    if (Math.max(...hs) - Math.min(...hs) > 1.6) return err('Terreno inclinado demais para a FOB');
+    for (const e of this.players) {
+      if (e.life !== LIFE_NONE && Math.abs(e.ms.x - cx) < R + 0.6 && Math.abs(e.ms.z - cz) < R + 0.6) return err('Tem gente no caminho da FOB');
+    }
+    // substitui a FOB antiga do time
+    const old = this.fobs[p.team];
+    if (old) this.destroyFob(p.team, null, false);
+    const gy = this.world.heightAt(cx, cz);
+    const ids: Box[] = [];
+    const add = (x0: number, z0: number, x1: number, z1: number, h: number, kind: number, color: number) =>
+      ids.push(this.world.addBox({ id: 0, x0: cx + x0, x1: cx + x1, z0: cz + z0, z1: cz + z1, y0: gy - 1, y1: gy + h, kind, color }));
+    const TEAM_CRATE = [0x3b6fd1, 0xc9433a, 0x3f9e4a];
+    add(-0.8, -0.7, 0.8, 0.7, 1.15, BoxKind.Fob, TEAM_CRATE[p.team]);
+    for (const s of [-1, 1]) {
+      add(-3.2, s * R - 0.4, -1.0, s * R + 0.4, 1.15, BoxKind.Sandbag, 0xb9a57c);
+      add(1.0, s * R - 0.4, 3.2, s * R + 0.4, 1.15, BoxKind.Sandbag, 0xb9a57c);
+      add(s * R - 0.4, -3.2, s * R + 0.4, -1.0, 1.15, BoxKind.Sandbag, 0xb9a57c);
+      add(s * R - 0.4, 1.0, s * R + 0.4, 3.2, 1.15, BoxKind.Sandbag, 0xb9a57c);
+    }
+    this.fobs[p.team] = { team: p.team, x: cx, z: cz, y: gy, hp: FOB_HP, ids: ids.map((b) => b.id), owner: p.id };
+    p.hasFob = false;
+    this.broadcast({ t: 'build', add: ids });
+    for (const q of this.players) if (q.team === p.team) this.sendTo(q, { t: 'msg', text: `${p.name} ergueu uma FOB: munição e cura perto da caixa do time` });
+    this.award(p, 'fob');
+    this.sendTo(p, { t: 'life', life: LIFE_ALIVE, tools: this.toolsMsg(p) });
+    this.sendState();
+    return true;
+  }
+
+  private destroyFob(team: number, by: Player | null, announce = true) {
+    const f = this.fobs[team];
+    if (!f) return;
+    for (const id of f.ids) this.world.removeBox(id);
+    this.broadcast({ t: 'build', remove: f.ids });
+    this.fobs[team] = null;
+    if (announce) {
+      this.broadcast({ t: 'msg', text: `FOB do time ${TEAM_NAMES[team]} foi destruída!` });
+      if (by && by.team !== team) this.award(by, 'fobKill');
+    }
+    this.sendState();
   }
 
   private mark(p: Player) {
@@ -624,6 +745,15 @@ export class Match {
       const dmg = NADE_DAMAGE * (1 - d / NADE_RADIUS) * (1 - ARMOR_REDUCTION[e.loadout?.armor?.armor ?? 0] * 0.5);
       this.damage(e, dmg, owner, 'Granada', false);
     }
+    // FOBs inimigas sofrem dano de explosão
+    for (const f of this.fobs) {
+      if (!f || f.team === owner.team) continue;
+      const d = Math.hypot(f.x - n.x, f.y + 0.6 - n.y, f.z - n.z);
+      if (d > NADE_RADIUS + 1.5) continue;
+      f.hp -= NADE_DAMAGE * (1 - d / (NADE_RADIUS + 1.5)) * 1.2;
+      if (f.hp <= 0) this.destroyFob(f.team, owner);
+      else this.sendState();
+    }
   }
 
   // ---------- snapshots ----------
@@ -636,7 +766,7 @@ export class Match {
       maskSet(mask, p.id);
       const lo = p.loadout;
       this.ents[p.id] = {
-        id: p.id, x: p.ms.x, y: p.ms.y, z: p.ms.z, yaw: p.yaw, pitch: p.pitch, life: p.life, crouch: p.ms.crouch, sprint: p.sprinting,
+        id: p.id, x: p.ms.x, y: p.ms.y, z: p.ms.z, yaw: p.yaw, pitch: p.pitch, life: p.life, crouch: p.ms.crouch, prone: p.ms.prone, sprint: p.sprinting,
         marked: false, team: p.team, armor: lo?.armor?.armor ?? 0, helmet: lo?.helmet?.helmet ?? 0,
         weapon: lo ? (p.slot === 0 ? lo.primary.idx : lo.secondary.idx) : 0, shot: p.shot, hp: p.hp,
       };
@@ -661,7 +791,8 @@ export class Match {
         own: {
           x: p.ms.x, y: p.ms.y, z: p.ms.z, vx: p.ms.vx, vy: p.ms.vy, vz: p.ms.vz, hp: p.hp, life: p.life,
           ammo: p.ammo[slot], reserve: p.reserve[slot],
-          flags: (p.reloadEnd > 0 ? 1 : 0) | (p.ms.onGround ? 2 : 0) | (p.ms.crouch ? 4 : 0), slot,
+          flags: (p.reloadEnd > 0 ? 1 : 0) | (p.ms.onGround ? 2 : 0) | (p.ms.crouch ? 4 : 0) | (p.ms.tired ? 8 : 0) | (p.ms.prone ? 16 : 0), slot,
+          stamina: p.ms.stamina, stanceCd: p.ms.stanceCd,
         },
         alive: mask, ents: list,
       }));

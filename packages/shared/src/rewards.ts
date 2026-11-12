@@ -1,6 +1,6 @@
 // Tabela de XP e cash por ação. Cash vale o dobro dentro da Hot Zone.
 
-export type RewardKind = 'kill' | 'headshot' | 'assist' | 'revive' | 'heal' | 'build' | 'mark' | 'presence' | 'win';
+export type RewardKind = 'kill' | 'headshot' | 'assist' | 'revive' | 'heal' | 'build' | 'mark' | 'presence' | 'win' | 'fob' | 'fobKill' | 'resupply';
 export type ZoneWhere = 'out' | 'cz' | 'hz';
 
 export interface RewardDef { label: string; xp: number; cash: number; cashCz?: number }
@@ -15,6 +15,9 @@ export const REWARDS: Record<RewardKind, RewardDef> = {
   mark: { label: 'Alvo marcado abatido', xp: 25, cash: 300 },
   presence: { label: 'Presença na zona', xp: 10, cash: 250 },
   win: { label: 'Vitória', xp: 1000, cash: 10000 },
+  fob: { label: 'FOB erguida', xp: 50, cash: 500 },
+  fobKill: { label: 'FOB inimiga destruída', xp: 150, cash: 1500 },
+  resupply: { label: 'Aliado reabastecido na FOB', xp: 5, cash: 50 },
 };
 
 /** Valor final de uma recompensa conforme onde o jogador está. */

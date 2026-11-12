@@ -105,7 +105,7 @@ export interface SoldierPose {
   id: number;
   x: number; y: number; z: number;
   yaw: number; pitch: number;
-  crouch: boolean; sprint: boolean; downed: boolean;
+  crouch: boolean; prone: boolean; sprint: boolean; downed: boolean;
   team: number; armor: number; helmet: number; gun: number;
   marker: number; // 0 nenhum, 1 aliado, 2 inimigo marcado
   dist: number;
@@ -191,7 +191,7 @@ export class Soldiers {
     const v = p.downed ? 0 : this.speed[id];
     const far = p.dist > 160;
     this.phase[id] += v * dt * 2.3;
-    const cTarget = p.crouch ? 1 : 0;
+    const cTarget = p.crouch && !p.prone ? 1 : 0;
     this.crouchAmt[id] += (cTarget - this.crouchAmt[id]) * Math.min(1, dt * 12);
     const c = this.crouchAmt[id];
     const ph = this.phase[id];
@@ -203,10 +203,11 @@ export class Soldiers {
 
     root.copy(local(p.x, p.y, p.z, 0, p.yaw, 0));
     if (p.downed) root.multiply(local(0, 0.16, -0.75, Math.PI / 2 - 0.06, 0, 0));
-    const hipY = 0.93 - 0.4 * c + Math.abs(Math.sin(ph * 2)) * 0.025 * amp;
+    else if (p.prone) root.multiply(local(0, 0.13, 0.55, -Math.PI / 2 + 0.05, 0, 0)); // de bruços, cabeça para frente
+    const hipY = p.prone ? 0.93 : 0.93 - 0.4 * c + Math.abs(Math.sin(ph * 2)) * 0.025 * amp;
     hips.multiplyMatrices(root, local(0, hipY, 0, 0, 0, 0));
     const pitch = p.downed ? 0 : p.pitch;
-    const lean = p.downed ? 0 : 0.06 + (p.sprint ? 0.26 : 0) * amp + c * 0.28;
+    const lean = p.downed || p.prone ? 0 : 0.06 + (p.sprint ? 0.26 : 0) * amp + c * 0.28;
     torso.multiplyMatrices(hips, local(0, 0.07, 0, -lean + pitch * 0.35, 0, 0));
     head.multiplyMatrices(torso, local(0, 0.68, 0, pitch * 0.45 + lean * 0.6, 0, 0));
 
@@ -238,6 +239,7 @@ export class Soldiers {
       const sx = side === 0 ? 0.235 : -0.235;
       let rx: number, rz: number, bend: number;
       if (p.downed) { rx = 0.2; rz = side === 0 ? -0.5 : 0.5; bend = 0.3; }
+      else if (p.prone) { rx = Math.PI - 0.5 + (side === 0 ? 0.25 : -0.1) + (side === 0 ? -sw : sw) * 0.3; rz = side === 0 ? -0.15 : 0.35; bend = -0.5; }
       else if (relaxed) { rx = (side === 0 ? -sw : sw) * 1.1 + 0.2; rz = side === 0 ? -0.08 : 0.08; bend = 1.0; }
       else if (side === 0) { rx = 0.75 + aim; rz = -0.1; bend = 1.15; }
       else { rx = 1.25 + aim; rz = 0.5; bend = 0.35; }
@@ -253,6 +255,7 @@ export class Soldiers {
       const s = side === 0 ? 1 : -1;
       let th: number, knee: number;
       if (p.downed) { th = side === 0 ? 0.25 : -0.05; knee = side === 0 ? -0.5 : -0.1; }
+      else if (p.prone) { th = s * 0.12 + s * sw * 0.2; knee = side === 0 ? -0.15 - Math.max(0, sw) * 0.5 : -0.1 - Math.max(0, -sw) * 0.5; }
       else {
         th = s * sw * 0.8 + c * (side === 0 ? 1.25 : 1.05);
         knee = -((0.08 + 0.85 * Math.max(0, s * cs)) * amp + c * (side === 0 ? 2.05 : 1.85));
@@ -268,14 +271,15 @@ export class Soldiers {
     if (!p.downed && !(far && p.dist > 260)) {
       const g = this.guns[p.gun];
       const gi = this.gunN[p.gun]++;
-      if (relaxed) tmp.multiplyMatrices(torso, local(0.13, 0.28, -0.22, -0.55, 0.5, 0));
+      if (p.prone) tmp.multiplyMatrices(torso, local(0.11, 0.62, 0.02, Math.PI / 2, 0, 0));
+      else if (relaxed) tmp.multiplyMatrices(torso, local(0.13, 0.28, -0.22, -0.55, 0.5, 0));
       else tmp.multiplyMatrices(torso, local(0.13, 0.4, -0.33, aim * 0.75 + lean, 0, 0));
       g.setMatrixAt(gi, tmp);
     }
 
     if (p.marker) {
       const mi = this.markN++;
-      this.markerM.setMatrixAt(mi, local(p.x, p.y + (p.downed ? 0.9 : 2.12 - 0.4 * c), p.z, 0, performance.now() / 600, 0));
+      this.markerM.setMatrixAt(mi, local(p.x, p.y + (p.downed ? 0.9 : p.prone ? 0.9 : 2.12 - 0.4 * c), p.z, 0, performance.now() / 600, 0));
       this.markerM.setColorAt(mi, p.marker === 2 ? col.setHex(0xff3030) : p.downed ? col.setHex(0xffe14d) : col.setHex(TEAM_COLORS[p.team]));
     }
   }

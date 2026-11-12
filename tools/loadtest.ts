@@ -24,13 +24,13 @@ for (let i = 0; i < N; i++) {
       if (bin) { snaps++; return; }
       const m = JSON.parse(data.toString());
       if (m.t === 'msg' && m.text === 'Servidor cheio') full++;
-      if (m.t === 'welcome' || (m.t === 'life' && m.life === 0)) setTimeout(() => ws.send(JSON.stringify({ t: 'spawn', items: [], where: 'forward' })), 500);
+      if (m.t === 'welcome' || (m.t === 'life' && m.life === 0)) setTimeout(() => ws.send(JSON.stringify({ t: 'spawn', items: [] })), 500);
       if (m.t === 'welcome' && !timer) {
         timer = setInterval(() => {
           if (ws.readyState !== ws.OPEN) return;
           if (Math.random() < 0.02) yaw += (Math.random() - 0.5) * 2;
           const fire = Math.random() < 0.3 ? BTN_FIRE : 0;
-          ws.send(Buffer.from(encodeInput({ seq: ++seq, buttons: BTN_FWD | BTN_SPRINT | fire, buttons2: 0, yaw, pitch: 0, renderTick: 0 })));
+          ws.send(Buffer.from(encodeInput({ seq: ++seq, buttons: BTN_FWD | BTN_SPRINT | fire, buttons2: 0, buttons3: 0, yaw, pitch: 0, renderTick: 0 })));
         }, 1000 / 30);
       }
     });

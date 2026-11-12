@@ -1,6 +1,6 @@
 import {
-  ITEMS, ITEM_BY_ID, MAX_TOOLS, PRESETS, SCORE_TO_WIN, TEAM_CSS, TEAM_NAMES, buildLoadout, levelFromXp, priceFor, xpForLevel,
-  type Item, type RosterEntry, type Zone, type ZoneWhere,
+  BoxKind, ITEMS, ITEM_BY_ID, MAX_TOOLS, SCORE_PER_PRESENCE_SECOND, SCORE_TO_WIN, Surface, TEAM_CSS, TEAM_NAMES, WORLD_SIZE, buildLoadout,
+  levelFromXp, priceFor, xpForLevel, type Item, type RosterEntry, type World, type Zone, type ZoneWhere, type WeaponStats,
 } from '@warbit/shared';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -10,38 +10,87 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 export interface StateView { phase: string; timeLeft: number; scores: number[]; presence: number[]; control: number; hzIn: number; winner: number; counts: number[] }
 export interface ProfileView { cash: number; xp: number; level: number; lifeProfit: number; kills: number; deaths: number }
 export interface MapDot { x: number; z: number; team: number; kind: 0 | 1 | 2 } // 0 aliado, 1 inimigo marcado, 2 aliado caído
+export interface MapFob { team: number; x: number; z: number }
+
+// ---------- categorias da loja ----------
+interface Cat { id: string; label: string; match: (i: Item) => boolean }
+const CATS: Cat[] = [
+  { id: 'primary', label: 'Arma principal', match: (i) => i.slot === 'primary' && !i.soon },
+  { id: 'secondary', label: 'Arma secundária', match: (i) => i.slot === 'secondary' && !i.soon },
+  { id: 'sight', label: 'Miras', match: (i) => i.slot === 'sight' },
+  { id: 'armor', label: 'Proteção', match: (i) => (i.slot === 'armor' || i.slot === 'helmet' || i.slot === 'vest') && !i.soon },
+  { id: 'medic', label: 'Médico', match: (i) => i.slot === 'tool' && i.track === 'Médica' && !i.soon },
+  { id: 'build', label: 'Construção', match: (i) => i.slot === 'tool' && i.track === 'Construção' && !i.soon },
+  { id: 'recon', label: 'Recon', match: (i) => i.slot === 'tool' && i.track === 'Recon' && !i.soon },
+  { id: 'util', label: 'Utilitários', match: (i) => i.slot === 'tool' && i.track === 'Assalto' && !i.soon },
+  { id: 'soon', label: 'Em breve', match: (i) => !!i.soon },
+];
+
+const GUN_SVG: Record<string, string> = {
+  rifle: '<rect x="4" y="9" width="44" height="6" rx="1"/><rect x="48" y="10" width="26" height="3"/><rect x="14" y="14" width="7" height="10"/><rect x="2" y="7" width="14" height="9"/><rect x="26" y="5" width="12" height="4"/>',
+  smg: '<rect x="8" y="9" width="34" height="7" rx="1"/><rect x="42" y="10" width="14" height="3"/><rect x="18" y="15" width="6" height="13"/><rect x="2" y="8" width="10" height="7"/><rect x="30" y="15" width="5" height="8"/>',
+  shotgun: '<rect x="4" y="9" width="30" height="6" rx="1"/><rect x="34" y="9" width="44" height="3"/><rect x="34" y="13" width="30" height="3"/><rect x="2" y="7" width="14" height="10"/><rect x="40" y="12" width="14" height="4"/>',
+  sniper: '<rect x="2" y="10" width="52" height="5" rx="1"/><rect x="54" y="11" width="22" height="2"/><rect x="26" y="4" width="22" height="5" rx="2"/><rect x="2" y="8" width="12" height="9"/><rect x="22" y="14" width="5" height="9"/>',
+  pistol: '<rect x="14" y="8" width="38" height="7" rx="1"/><rect x="20" y="14" width="8" height="14" transform="rotate(8 24 21)"/>',
+};
+const sightSvg = (it: Item) => it.sight!.kind === 'scope'
+  ? '<rect x="8" y="10" width="48" height="10" rx="4"/><rect x="2" y="8" width="8" height="14" rx="2"/><rect x="54" y="8" width="8" height="14" rx="2"/><rect x="26" y="20" width="10" height="6"/>'
+  : '<rect x="10" y="6" width="40" height="3"/><rect x="10" y="21" width="40" height="3"/><rect x="10" y="6" width="3" height="18"/><rect x="47" y="6" width="3" height="18"/><circle cx="30" cy="15" r="2" fill="#ff4a4a"/>';
+function silhouette(it: Item): string {
+  const body = it.weapon ? GUN_SVG[it.weapon.cls] : it.sight ? sightSvg(it) : '';
+  if (!body) return '';
+  return `<svg viewBox="0 0 80 30" class="sil">${body}</svg>`;
+}
+
+function bars(w: WeaponStats): string {
+  const bar = (label: string, v: number, bad = false) =>
+    `<div class="bar"><span>${label}</span><i><b class="${bad ? 'bad' : ''}" style="width:${Math.round(Math.max(0.04, Math.min(1, v)) * 100)}%"></b></i></div>`;
+  return bar('Dano', (w.dmg * (w.pellets ?? 1) * 0.5) / 55) + bar('Cadência', w.rpm / 900) + bar('Alcance', w.falloffEnd / 600) + bar('Recuo', w.recoil / 9, true);
+}
 
 export class UI {
   profile: ProfileView = { cash: 0, xp: 0, level: 1, lifeProfit: 0, kills: 0, deaths: 0 };
+  /** nada vem marcado: o jogador escolhe item por item */
   private sel = new Set<string>();
+  private cat = 'primary';
+  private lastBuy: string[] = [];
+  private waitUntil = 0;
   private centerTimer = 0;
   private hitTimer = 0;
   private hurtTimer = 0;
   private mm = $<HTMLCanvasElement>('minimap').getContext('2d')!;
-  onSpawn: (items: string[], where: 'base' | 'forward') => void = () => {};
+  private mmBase: HTMLCanvasElement | null = null;
+  private mmZoomIdx = 1;
+  private static readonly MM_ZOOMS = [0.22, 0.45, 0.9, 1.8]; // pixels por metro
+  onSpawn: (items: string[]) => void = () => {};
 
   constructor() {
-    try {
-      const saved = JSON.parse(localStorage.getItem('warbit.loadout') ?? '[]') as string[];
-      for (const id of saved) if (ITEM_BY_ID[id]) this.sel.add(id);
-    } catch { /* sem armazenamento: segue com o kit grátis */ }
-    if (!this.sel.size) for (const id of PRESETS[1].items) this.sel.add(id);
-    $('spawnFwd').onclick = () => this.onSpawn([...this.sel], 'forward');
-    $('spawnBase').onclick = () => this.onSpawn([...this.sel], 'base');
-    const pr = $('presets');
-    for (const p of PRESETS) {
+    try { this.lastBuy = (JSON.parse(localStorage.getItem('warbit.lastBuy') ?? '[]') as string[]).filter((id) => ITEM_BY_ID[id]); } catch { /* sem armazenamento */ }
+    $('spawnBase').onclick = () => {
+      if (Date.now() < this.waitUntil) return;
+      const items = [...this.sel];
+      this.lastBuy = items;
+      try { localStorage.setItem('warbit.lastBuy', JSON.stringify(items)); } catch { /* ignora */ }
+      this.onSpawn(items);
+    };
+    $('repeatBtn').onclick = () => { this.sel = new Set(this.lastBuy.filter((id) => this.available(ITEM_BY_ID[id]))); this.renderShop(); };
+    $('clearBtn').onclick = () => { this.sel.clear(); this.renderShop(); };
+    const tabs = $('tabs');
+    for (const c of CATS) {
       const b = document.createElement('button');
-      b.textContent = p.name;
-      b.onclick = () => { this.sel = new Set(p.items); this.renderShop(); };
-      pr.appendChild(b);
+      b.dataset.cat = c.id;
+      b.textContent = c.label;
+      b.onclick = () => { this.cat = c.id; this.renderShop(); };
+      tabs.appendChild(b);
     }
     const sc = $('scores');
     for (let t = 0; t < 3; t++) {
       const d = document.createElement('div');
       d.className = 'score'; d.id = 'score' + t;
-      d.innerHTML = `<div class="bar" style="background:${TEAM_CSS[t]}"></div><b style="color:${TEAM_CSS[t]}">0</b><span></span>`;
+      d.innerHTML = `<div class="bar2" style="background:${TEAM_CSS[t]}"></div><b style="color:${TEAM_CSS[t]}">0</b><span></span>`;
       sc.appendChild(d);
     }
+    setInterval(() => this.tickWait(), 250);
   }
 
   show(id: string, on: boolean) { $(id).classList.toggle('hidden', !on); }
@@ -50,9 +99,10 @@ export class UI {
   setState(s: StateView, myTeam: number) {
     for (let t = 0; t < 3; t++) {
       const d = $('score' + t);
-      (d.querySelector('.bar') as HTMLElement).style.width = Math.min(100, (s.scores[t] / SCORE_TO_WIN) * 100) + '%';
-      d.querySelector('b')!.textContent = String(Math.floor(s.scores[t]));
-      d.querySelector('span')!.textContent = `${TEAM_NAMES[t]} · ${s.presence[t]} na zona`;
+      (d.querySelector('.bar2') as HTMLElement).style.width = Math.min(100, (s.scores[t] / SCORE_TO_WIN) * 100) + '%';
+      d.querySelector('b')!.textContent = s.scores[t].toFixed(1);
+      const rate = s.control === t ? ` · +${(s.presence[t] * SCORE_PER_PRESENCE_SECOND).toFixed(2)}/s` : '';
+      d.querySelector('span')!.textContent = `${TEAM_NAMES[t]} · ${s.presence[t]} na zona${rate}`;
       d.classList.toggle('ctrl', s.control === t);
       d.classList.toggle('mine', t === myTeam);
     }
@@ -80,13 +130,20 @@ export class UI {
     if (!$('shop').classList.contains('hidden')) this.renderShop();
   }
 
-  setVitals(hp: number, ammo: number, reserve: number, weapon: string, reloading: boolean) {
+  setVitals(hp: number, ammo: number, reserve: number, weapon: string, reloading: boolean, sight: string) {
     $('hptext').textContent = String(Math.max(0, Math.ceil(hp)));
     const bar = $('hpbar').firstElementChild as HTMLElement;
     bar.style.width = Math.max(0, Math.min(100, hp)) + '%';
     bar.style.background = hp > 50 ? '#e9e9e9' : hp > 25 ? '#f5c542' : '#ef4444';
     $('ammo').innerHTML = `${reloading ? '…' : ammo} <small>/ ${reserve}</small>`;
-    $('weapon').textContent = reloading ? `${weapon} — recarregando` : weapon;
+    $('weapon').textContent = (reloading ? `${weapon} — recarregando` : weapon) + (sight ? ` · ${sight}` : '');
+  }
+
+  setStamina(v: number, tired: boolean, stance: string) {
+    const b = $('stambar').firstElementChild as HTMLElement;
+    b.style.width = Math.round(v * 100) + '%';
+    b.style.background = tired ? '#ef4444' : v < 0.35 ? '#f5c542' : '#7ee08a';
+    $('stance').textContent = stance;
   }
 
   setTools(list: { key: string; label: string; n?: number }[]) {
@@ -140,10 +197,8 @@ export class UI {
     this.hurtTimer = window.setTimeout(() => { v.style.transition = 'opacity .5s'; v.style.opacity = '0'; }, 80);
   }
 
-  aim(scope: boolean, crosshair: boolean) {
-    this.show('scope', scope);
-    this.show('crosshair', crosshair && !scope);
-  }
+  /** overlay da luneta (só para mira com muito aumento). Não existe cruz na tela: mire com o botão direito. */
+  aim(scope: boolean) { this.show('scope', scope); }
 
   downed(on: boolean, left = 0) {
     this.show('downed', on);
@@ -153,14 +208,28 @@ export class UI {
   perf(text: string) { $('perf').textContent = text; }
 
   // ---------- loja ----------
-  openShop(msg: string) {
+  private available(it: Item | undefined): boolean {
+    return !!it && !it.soon && it.level <= this.profile.level;
+  }
+
+  openShop(msg: string, waitSeconds = 0) {
     $('shopMsg').textContent = msg;
     $('shopErr').textContent = '';
+    this.sel.clear(); // nunca vem nada marcado
+    this.waitUntil = Date.now() + waitSeconds * 1000;
     this.show('shop', true);
     this.renderShop();
+    this.tickWait();
   }
   closeShop() { this.show('shop', false); }
   shopError(e: string) { $('shopErr').textContent = e; }
+
+  private tickWait() {
+    const btn = $('spawnBase') as HTMLButtonElement;
+    const left = Math.ceil((this.waitUntil - Date.now()) / 1000);
+    if (left > 0) { btn.disabled = true; btn.textContent = `Renascer em ${left}s`; }
+    else { btn.disabled = false; btn.textContent = 'Entrar em campo (Base)'; }
+  }
 
   private toggle(it: Item) {
     if (this.sel.has(it.id)) { this.sel.delete(it.id); }
@@ -175,50 +244,65 @@ export class UI {
       }
       this.sel.add(it.id);
     }
-    try { localStorage.setItem('warbit.loadout', JSON.stringify([...this.sel])); } catch { /* ignora */ }
     this.renderShop();
   }
 
   private renderShop() {
     const lvl = this.profile.level;
-    // descarta seleção que ficou inválida (nível, Fase 2)
-    for (const id of [...this.sel]) { const it = ITEM_BY_ID[id]; if (!it || it.soon || it.level > lvl) this.sel.delete(id); }
-    const groups: [string, (i: Item) => boolean][] = [
-      ['Arma principal', (i) => i.slot === 'primary'], ['Arma secundária', (i) => i.slot === 'secondary'],
-      ['Blindagem', (i) => i.slot === 'armor'], ['Capacete', (i) => i.slot === 'helmet'], ['Colete tático (munição)', (i) => i.slot === 'vest'],
-      [`Ferramentas (até ${MAX_TOOLS})`, (i) => i.slot === 'tool'],
-    ];
+    for (const id of [...this.sel]) if (!this.available(ITEM_BY_ID[id])) this.sel.delete(id);
+    for (const b of Array.from($('tabs').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.cat === this.cat);
+    // ---- cartões
     const root = $('items');
     const scroll = root.scrollTop;
     root.innerHTML = '';
-    for (const [title, f] of groups) {
-      const h = document.createElement('h3'); h.textContent = title; root.appendChild(h);
-      const grid = document.createElement('div'); grid.className = 'grid'; root.appendChild(grid);
-      for (const it of ITEMS.filter(f)) {
-        const locked = !!it.soon || it.level > lvl;
-        const price = priceFor(it, lvl);
-        const d = document.createElement('div');
-        d.className = 'item' + (this.sel.has(it.id) ? ' sel' : '') + (locked ? ' locked' : '');
-        const tag = it.soon ? 'em breve' : it.level > lvl ? `nível ${it.level}` : price === 0 ? 'grátis' : money(price);
-        d.innerHTML = `<div class="n"><span>${esc(it.name)}</span><em>${tag}</em></div><div class="d">${esc(it.track)} · ${esc(it.desc)}</div>`;
-        if (!locked) d.onclick = () => this.toggle(it);
-        grid.appendChild(d);
-      }
+    const cat = CATS.find((c) => c.id === this.cat) ?? CATS[0];
+    const primary = [...this.sel].map((id) => ITEM_BY_ID[id]).find((i) => i.slot === 'primary');
+    const grid = document.createElement('div'); grid.className = 'grid'; root.appendChild(grid);
+    for (const it of ITEMS.filter(cat.match)) {
+      const sniperLock = !!it.sight?.sniperOnly && (primary ?? ITEM_BY_ID.fuzil_basico).weapon?.cls !== 'sniper';
+      const locked = !!it.soon || it.level > lvl;
+      const price = priceFor(it, lvl);
+      const tag = it.soon ? 'em breve' : it.level > lvl ? `nível ${it.level}` : price === 0 ? 'grátis' : money(price);
+      const d = document.createElement('div');
+      d.className = 'item' + (this.sel.has(it.id) ? ' sel' : '') + (locked ? ' locked' : '') + (sniperLock && !locked ? ' warn' : '');
+      d.innerHTML = `${silhouette(it)}<div class="n"><span>${esc(it.name)}</span><em>${tag}</em></div>`
+        + `<div class="d">${esc(it.desc)}${sniperLock && !locked ? ' <b>(exige arma de precisão)</b>' : ''}</div>${it.weapon ? `<div class="bars">${bars(it.weapon)}</div>` : ''}`;
+      if (!locked) d.onclick = () => this.toggle(it);
+      grid.appendChild(d);
     }
     root.scrollTop = scroll;
+
+    // ---- carrinho
     const res = buildLoadout([...this.sel], lvl, Infinity);
-    const sum = $('summary');
+    const slots = $('slots');
+    const rows: { label: string; item: Item | undefined; free?: string }[] = [];
     if (res.ok) {
       const lo = res.loadout;
-      const rows = [lo.primary, lo.secondary, lo.armor, lo.helmet, lo.vest, ...lo.tools].filter(Boolean) as Item[];
-      sum.innerHTML = rows.map((it) => `<div class="row"><span>${esc(it.name)}</span><span>${priceFor(it, lvl) === 0 ? 'grátis' : money(priceFor(it, lvl))}</span></div>`).join('')
-        + (lvl <= 10 ? '<div class="note" style="margin-top:8px">Desconto de recruta: 50% até o nível 10.</div>' : '');
-      $('totalV').textContent = money(lo.cost);
-      $('shopErr').textContent = lo.cost > this.profile.cash ? 'Saldo insuficiente — remova itens ou use o kit grátis.' : '';
-    } else {
-      sum.innerHTML = '';
-      $('shopErr').textContent = res.error;
+      const pick = (slot: string) => [...this.sel].map((id) => ITEM_BY_ID[id]).find((i) => i.slot === slot);
+      rows.push({ label: 'Principal', item: pick('primary'), free: 'Fuzil básico (grátis)' });
+      rows.push({ label: 'Secundária', item: pick('secondary'), free: 'Pistola padrão (grátis)' });
+      rows.push({ label: 'Mira', item: lo.sight, free: 'Mira de ferro' });
+      rows.push({ label: 'Blindagem', item: lo.armor });
+      rows.push({ label: 'Capacete', item: lo.helmet });
+      rows.push({ label: 'Colete', item: lo.vest });
+      for (let k = 0; k < MAX_TOOLS; k++) rows.push({ label: k === 0 ? 'Ferramentas' : '', item: lo.tools[k] });
     }
+    slots.innerHTML = rows.map((r) => {
+      const body = r.item
+        ? `<span class="nm">${esc(r.item.name)}</span><span class="pr">${priceFor(r.item, lvl) === 0 ? 'grátis' : money(priceFor(r.item, lvl))}</span><button data-id="${r.item.id}" title="Remover">×</button>`
+        : `<span class="nm empty">${r.free ? esc(r.free) : 'vazio'}</span>`;
+      return `<div class="slot"><label>${r.label}</label>${body}</div>`;
+    }).join('');
+    for (const b of Array.from(slots.querySelectorAll('button')) as HTMLButtonElement[]) b.onclick = () => { this.sel.delete(b.dataset.id!); this.renderShop(); };
+    const cost = res.ok ? res.loadout.cost : 0;
+    $('totalV').textContent = money(cost);
+    const after = this.profile.cash - cost;
+    $('afterV').textContent = money(after);
+    $('afterV').style.color = after < 0 ? '#ff7b7b' : '#7ee08a';
+    $('shopErr').textContent = !res.ok ? res.error : after < 0 ? 'Saldo insuficiente — tire itens do carrinho.' : '';
+    ($('repeatBtn') as HTMLButtonElement).disabled = !this.lastBuy.length;
+    $('repeatBtn').title = this.lastBuy.length ? this.lastBuy.map((id) => ITEM_BY_ID[id].name).join(', ') : 'Nenhuma compra anterior';
+    ($('spawnBase') as HTMLButtonElement).dataset.bad = !res.ok || after < 0 ? '1' : '';
   }
 
   // ---------- placar ----------
@@ -238,29 +322,116 @@ export class UI {
   }
 
   // ---------- minimapa ----------
-  minimap(px: number, pz: number, yaw: number, cz: Zone, hz: Zone, bases: { x: number; z: number }[], spawns: { x: number; z: number }[], dots: MapDot[], myTeam: number) {
-    const c = this.mm, S = 210, H = S / 2;
-    const scale = Math.max(0.28, Math.min(0.55, H / (Math.hypot(cz.x - px, cz.z - pz) + cz.r * 0.5)));
-    c.clearRect(0, 0, S, S);
-    const X = (x: number) => H + (x - px) * scale, Y = (z: number) => H + (z - pz) * scale;
-    c.lineWidth = 1.5;
-    c.strokeStyle = 'rgba(255,255,255,.7)'; c.fillStyle = 'rgba(255,255,255,.06)';
-    c.beginPath(); c.arc(X(cz.x), Y(cz.z), cz.r * scale, 0, 6.2832); c.fill(); c.stroke();
-    c.strokeStyle = '#ff8a1f'; c.fillStyle = 'rgba(255,138,31,.35)';
-    c.beginPath(); c.arc(X(hz.x), Y(hz.z), Math.max(3, hz.r * scale), 0, 6.2832); c.fill(); c.stroke();
-    bases.forEach((b, t) => { c.fillStyle = TEAM_CSS[t]; c.fillRect(X(b.x) - 5, Y(b.z) - 5, 10, 10); });
-    spawns.forEach((s, t) => { c.strokeStyle = TEAM_CSS[t]; c.strokeRect(X(s.x) - 4, Y(s.z) - 4, 8, 8); });
-    for (const d of dots) {
-      const x = X(d.x), y = Y(d.z);
-      if (x < 0 || y < 0 || x > S || y > S) continue;
-      c.fillStyle = d.kind === 1 ? '#ff3030' : d.kind === 2 ? '#ffe14d' : TEAM_CSS[d.team];
-      c.beginPath(); c.arc(x, y, d.kind === 1 ? 3.2 : 2.3, 0, 6.2832); c.fill();
+  /** Desenha o mapa inteiro uma vez (terreno, estradas, construções) numa imagem que o minimapa só transforma. */
+  setWorld(world: World) {
+    const S = 375, px = WORLD_SIZE / S;
+    const cv = document.createElement('canvas');
+    cv.width = S; cv.height = S;
+    const c = cv.getContext('2d')!;
+    const img = c.createImageData(S, S);
+    const pal: Record<number, [number, number, number]> = {
+      [Surface.Grass]: [112, 150, 78], [Surface.Road]: [170, 160, 140], [Surface.Field]: [176, 158, 82],
+      [Surface.Dirt]: [158, 140, 104], [Surface.Forest]: [64, 106, 56], [Surface.Concrete]: [150, 150, 146],
+    };
+    for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) {
+      const x = (i + 0.5) * px, z = (j + 0.5) * px;
+      const [r, g, b] = pal[world.surfaceAt(x, z)] ?? pal[Surface.Grass];
+      const sh = Math.max(-0.28, Math.min(0.28, (world.heightAt(x + px, z) - world.heightAt(x - px, z)) * 0.035 + (world.heightAt(x, z + px) - world.heightAt(x, z - px)) * 0.02));
+      const k = 1 + sh;
+      const o = (j * S + i) * 4;
+      img.data[o] = r * k; img.data[o + 1] = g * k; img.data[o + 2] = b * k; img.data[o + 3] = 255;
     }
-    // eu: seta apontando para onde olho (norte = -Z para cima)
-    c.save(); c.translate(H, H); c.rotate(-yaw);
-    c.fillStyle = '#fff'; c.strokeStyle = TEAM_CSS[myTeam]; c.lineWidth = 2;
-    c.beginPath(); c.moveTo(0, -7); c.lineTo(5, 6); c.lineTo(0, 3); c.lineTo(-5, 6); c.closePath(); c.fill(); c.stroke();
+    c.putImageData(img, 0, 0);
+    for (const b of world.boxes) {
+      if (b.kind === BoxKind.Tree || b.kind === BoxKind.Rock || b.kind === BoxKind.Crate || b.kind === BoxKind.Sandbag || b.kind === BoxKind.Fob) continue;
+      c.fillStyle = b.kind === BoxKind.Wall || b.kind === BoxKind.Fence ? '#5d5d58' : b.kind === BoxKind.Container ? '#6b4a3a' : b.kind === BoxKind.Roof ? '#3d3d3a' : '#46484c';
+      c.fillRect(b.x0 / px, b.z0 / px, Math.max(1, (b.x1 - b.x0) / px), Math.max(1, (b.z1 - b.z0) / px));
+    }
+    this.mmBase = cv;
+  }
+
+  /** N: aumenta/diminui o zoom (Shift+N diminui) */
+  cycleZoom(dir: 1 | -1 = 1) {
+    const n = UI.MM_ZOOMS.length;
+    this.mmZoomIdx = (this.mmZoomIdx + (dir === 1 ? 1 : n - 1)) % n;
+    this.center(`Minimapa ${['mundo', 'regional', 'próximo', 'detalhe'][this.mmZoomIdx]} (N)`, 900);
+  }
+
+  minimap(px: number, pz: number, yaw: number, cz: Zone, hz: Zone, bases: { x: number; z: number }[], fobs: MapFob[], dots: MapDot[], myTeam: number) {
+    const c = this.mm, S = 240, H = S / 2;
+    const sc = UI.MM_ZOOMS[this.mmZoomIdx];
+    const cosY = Math.cos(yaw), sinY = Math.sin(yaw);
+    // mundo -> tela: o mapa gira com você, a frente é sempre para cima
+    const X = (x: number, z: number) => H + sc * ((x - px) * cosY - (z - pz) * sinY);
+    const Y = (x: number, z: number) => H + sc * ((x - px) * sinY + (z - pz) * cosY);
+    c.clearRect(0, 0, S, S);
+    c.save();
+    c.beginPath(); c.arc(H, H, H - 1, 0, 6.2832); c.clip();
+    c.fillStyle = '#10161a'; c.fillRect(0, 0, S, S);
+    if (this.mmBase) {
+      c.save();
+      c.translate(H, H); c.rotate(yaw); c.scale(sc, sc); c.translate(-px, -pz);
+      c.imageSmoothingEnabled = sc < 1.2;
+      c.drawImage(this.mmBase, 0, 0, WORLD_SIZE, WORLD_SIZE);
+      c.restore();
+    }
+    // zonas
+    c.lineWidth = 2;
+    c.strokeStyle = 'rgba(255,255,255,.9)'; c.fillStyle = 'rgba(255,255,255,.10)';
+    c.beginPath(); c.arc(X(cz.x, cz.z), Y(cz.x, cz.z), cz.r * sc, 0, 6.2832); c.fill(); c.stroke();
+    c.strokeStyle = '#ff8a1f'; c.fillStyle = 'rgba(255,138,31,.38)';
+    c.beginPath(); c.arc(X(hz.x, hz.z), Y(hz.x, hz.z), Math.max(4, hz.r * sc), 0, 6.2832); c.fill(); c.stroke();
+    // bases
+    bases.forEach((b, t) => {
+      const x = X(b.x, b.z), y = Y(b.x, b.z);
+      c.fillStyle = TEAM_CSS[t]; c.strokeStyle = '#000'; c.lineWidth = 1.5;
+      c.beginPath(); c.rect(x - 6, y - 6, 12, 12); c.fill(); c.stroke();
+      c.fillStyle = '#fff'; c.font = 'bold 9px system-ui'; c.textAlign = 'center'; c.fillText('B', x, y + 3.2);
+    });
+    // FOBs
+    for (const f of fobs) {
+      const x = X(f.x, f.z), y = Y(f.x, f.z);
+      c.fillStyle = TEAM_CSS[f.team]; c.strokeStyle = '#fff'; c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(x, y - 7); c.lineTo(x + 7, y + 5); c.lineTo(x - 7, y + 5); c.closePath(); c.fill(); c.stroke();
+    }
+    // aliados e alvos marcados
+    for (const d of dots) {
+      const x = X(d.x, d.z), y = Y(d.x, d.z);
+      if ((x - H) ** 2 + (y - H) ** 2 > (H + 6) ** 2) continue;
+      c.fillStyle = d.kind === 1 ? '#ff3030' : d.kind === 2 ? '#ffe14d' : TEAM_CSS[d.team];
+      c.strokeStyle = '#000'; c.lineWidth = 1;
+      c.beginPath(); c.arc(x, y, d.kind === 1 ? 4 : 3.2, 0, 6.2832); c.fill(); c.stroke();
+    }
+    // seta na borda apontando a Control Zone quando ela está fora do mapa visível
+    const zx = X(cz.x, cz.z) - H, zy = Y(cz.x, cz.z) - H;
+    const zd = Math.hypot(zx, zy);
+    if (zd > H - 4 + cz.r * sc) {
+      const a = Math.atan2(zy, zx);
+      c.save(); c.translate(H + Math.cos(a) * (H - 12), H + Math.sin(a) * (H - 12)); c.rotate(a);
+      c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(9, 0); c.lineTo(-6, 7); c.lineTo(-3, 0); c.lineTo(-6, -7); c.closePath(); c.fill(); c.stroke();
+      c.restore();
+    }
+    // norte
+    {
+      // o norte do mundo (−Z) passa pela mesma transformação do resto do mapa
+      const ax = X(px, pz - 1000) - H, ay = Y(px, pz - 1000) - H, al = Math.hypot(ax, ay) || 1;
+      c.fillStyle = 'rgba(0,0,0,.55)'; c.beginPath(); c.arc(H + (ax / al) * (H - 11), H + (ay / al) * (H - 11), 8, 0, 6.2832); c.fill();
+      c.fillStyle = '#fff'; c.font = 'bold 11px system-ui'; c.textAlign = 'center';
+      c.fillText('N', H + (ax / al) * (H - 11), H + (ay / al) * (H - 11) + 4);
+    }
     c.restore();
+    c.strokeStyle = 'rgba(255,255,255,.35)'; c.lineWidth = 2;
+    c.beginPath(); c.arc(H, H, H - 1, 0, 6.2832); c.stroke();
+    // cone de visão e marcador do jogador (sempre no centro, apontando para cima)
+    c.save(); c.translate(H, H);
+    const g = c.createRadialGradient(0, 0, 0, 0, 0, 62);
+    g.addColorStop(0, 'rgba(255,255,255,.35)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g; c.beginPath(); c.moveTo(0, 0); c.arc(0, 0, 62, -Math.PI / 2 - 0.55, -Math.PI / 2 + 0.55); c.closePath(); c.fill();
+    c.fillStyle = '#fff'; c.strokeStyle = TEAM_CSS[myTeam]; c.lineWidth = 3;
+    c.beginPath(); c.moveTo(0, -11); c.lineTo(8, 9); c.lineTo(0, 4); c.lineTo(-8, 9); c.closePath(); c.stroke(); c.fill();
+    c.restore();
+    $('mmZoom').textContent = `${Math.round(S / sc)} m · N`;
   }
 }
 

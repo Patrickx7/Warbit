@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BTN_FWD, BTN_JUMP, BTN_SPRINT, DT, ITEM_BY_ID, LIFE_ALIVE, World, buildLoadout, computePresence, controllingTeam, decodeInput,
+  BTN3_PRONE, BTN_FWD, BTN_JUMP, BTN_SPRINT, DT, ITEM_BY_ID, LIFE_ALIVE, World, buildLoadout, computePresence, controllingTeam, decodeInput,
   decodeSnapshot, encodeInput, encodeSnapshot, levelFromXp, newMoveState, pointsFor, priceFor, rewardFor, stepMove, whereIs, xpForLevel,
   SCORE_PER_PRESENCE_SECOND, ALIVE_MASK_BYTES, maskHas, maskSet,
 } from '../src/index';
@@ -54,19 +54,52 @@ describe('movimento', () => {
   });
 });
 
+describe('posturas e fôlego', () => {
+  const start = () => { const s = newMoveState(750, world.heightAt(750, 750) + 0.1, 750); for (let i = 0; i < 30; i++) stepMove(s, 0, 0, world, DT); return s; };
+  it('deita, fica mais lento e levanta', () => {
+    const s = start();
+    for (let i = 0; i < 20; i++) stepMove(s, BTN_FWD, 0, world, DT, 1, BTN3_PRONE);
+    expect(s.prone).toBe(true);
+    for (let i = 0; i < 60; i++) stepMove(s, BTN_FWD, 0, world, DT, 1, BTN3_PRONE);
+    expect(Math.hypot(s.vx, s.vz)).toBeLessThan(1);
+    for (let i = 0; i < 40; i++) stepMove(s, 0, 0, world, DT, 1, 0);
+    expect(s.prone).toBe(false);
+  });
+  it('não levanta com teto baixo em cima', () => {
+    const s = start();
+    for (let i = 0; i < 10; i++) stepMove(s, 0, 0, world, DT, 1, BTN3_PRONE);
+    expect(s.prone).toBe(true);
+    const slab = world.addBox({ id: 0, x0: s.x - 2, x1: s.x + 2, z0: s.z - 2, z1: s.z + 2, y0: s.y + 0.8, y1: s.y + 1.2, kind: 7, color: 0 });
+    for (let i = 0; i < 20; i++) stepMove(s, 0, 0, world, DT, 1, 0);
+    expect(s.prone).toBe(true); // continua deitado debaixo da laje
+    world.removeBox(slab.id);
+    for (let i = 0; i < 20; i++) stepMove(s, 0, 0, world, DT, 1, 0);
+    expect(s.prone).toBe(false);
+  });
+  it('correr gasta fôlego, cansa e recupera', () => {
+    const s = start();
+    let everTired = false;
+    for (let i = 0; i < 30 * 13; i++) { stepMove(s, BTN_FWD | BTN_SPRINT, 0.3, world, DT); everTired ||= s.tired; }
+    expect(everTired).toBe(true); // ~11 s de corrida e o fôlego acaba
+    for (let i = 0; i < 30 * 12; i++) stepMove(s, 0, 0, world, DT);
+    expect(s.tired).toBe(false);
+    expect(s.stamina).toBeGreaterThan(0.9);
+  });
+});
+
 describe('protocolo', () => {
   it('input vai e volta', () => {
-    const m = { seq: 77, buttons: 133, buttons2: 9, yaw: 1.25, pitch: -0.5, renderTick: 123456 };
+    const m = { seq: 77, buttons: 133, buttons2: 9, buttons3: 3, yaw: 1.25, pitch: -0.5, renderTick: 123456 };
     const d = decodeInput(new DataView(encodeInput(m)))!;
-    expect(d.seq).toBe(77); expect(d.buttons).toBe(133); expect(d.buttons2).toBe(9);
+    expect(d.seq).toBe(77); expect(d.buttons).toBe(133); expect(d.buttons2).toBe(9); expect(d.buttons3).toBe(3);
     expect(d.yaw).toBeCloseTo(1.25, 5); expect(d.pitch).toBeCloseTo(-0.5, 5); expect(d.renderTick).toBe(123456);
   });
   it('snapshot vai e volta', () => {
     const alive = new Uint8Array(ALIVE_MASK_BYTES); maskSet(alive, 5); maskSet(alive, 99);
     const buf = encodeSnapshot({
       tick: 900, ack: 42, alive,
-      own: { x: 10.5, y: 3.25, z: 700, vx: 1, vy: -2, vz: 3, hp: 87, life: LIFE_ALIVE, ammo: 30, reserve: 120, flags: 3, slot: 1 },
-      ents: [{ id: 5, x: 812.4, y: 17.3, z: 44.9, yaw: 2.1, pitch: -0.4, life: 1, crouch: true, sprint: false, marked: true, team: 2, armor: 3, helmet: 4, weapon: 7, shot: 250, hp: 66 }],
+      own: { x: 10.5, y: 3.25, z: 700, vx: 1, vy: -2, vz: 3, hp: 87, life: LIFE_ALIVE, ammo: 30, reserve: 120, flags: 3, slot: 1, stamina: 0.5, stanceCd: 0.25 },
+      ents: [{ id: 5, x: 812.4, y: 17.3, z: 44.9, yaw: 2.1, pitch: -0.4, life: 1, crouch: true, prone: true, sprint: false, marked: true, team: 2, armor: 3, helmet: 4, weapon: 7, shot: 250, hp: 66 }],
     });
     const s = decodeSnapshot(new DataView(buf));
     expect(s.tick).toBe(900); expect(s.ack).toBe(42); expect(s.own.hp).toBe(87); expect(s.own.reserve).toBe(120); expect(s.own.slot).toBe(1);
@@ -74,7 +107,8 @@ describe('protocolo', () => {
     const e = s.ents[0];
     expect(e.id).toBe(5); expect(e.x).toBeCloseTo(812.4, 1); expect(e.y).toBeCloseTo(17.3, 1); expect(e.z).toBeCloseTo(44.9, 1);
     expect(e.yaw).toBeCloseTo(2.1, 1); expect(e.pitch).toBeCloseTo(-0.4, 1);
-    expect(e.crouch).toBe(true); expect(e.marked).toBe(true); expect(e.team).toBe(2); expect(e.armor).toBe(3); expect(e.helmet).toBe(4);
+    expect(s.own.stamina).toBeCloseTo(0.5, 2); expect(s.own.stanceCd).toBeCloseTo(0.25, 2);
+    expect(e.crouch).toBe(true); expect(e.prone).toBe(true); expect(e.marked).toBe(true); expect(e.team).toBe(2); expect(e.armor).toBe(3); expect(e.helmet).toBe(4);
     expect(e.weapon).toBe(7); expect(e.shot).toBe(250); expect(e.hp).toBe(66);
   });
 });
@@ -134,6 +168,21 @@ describe('loja', () => {
   it('soma o custo do loadout', () => {
     const r = buildLoadout(['fuzil_padrao', 'blind_1', 'capacete_1', 'reanimador'], 20, 99999);
     expect(r.ok && r.loadout.cost).toBe(1600 + 400 + 200 + 425);
+  });
+});
+
+describe('miras', () => {
+  it('compra mira óptica e soma o custo', () => {
+    const r = buildLoadout(['fuzil_padrao', 'mira_pontovermelho'], 20, 99999);
+    expect(r.ok && r.loadout.sight?.id).toBe('mira_pontovermelho');
+    expect(r.ok && r.loadout.cost).toBe(1600 + 350);
+  });
+  it('lunetas 6x/8x só em arma de precisão', () => {
+    expect(buildLoadout(['fuzil_padrao', 'mira_6x'], 20, 99999).ok).toBe(false);
+    expect(buildLoadout(['sniper_ferrolho', 'mira_8x'], 20, 99999).ok).toBe(true);
+  });
+  it('só uma mira', () => {
+    expect(buildLoadout(['fuzil_padrao', 'mira_2x', 'mira_4x'], 20, 99999).ok).toBe(false);
   });
 });
 

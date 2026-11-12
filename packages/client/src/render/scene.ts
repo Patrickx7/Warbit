@@ -1,19 +1,29 @@
 import * as THREE from 'three';
-import { BoxKind, TEAM_COLORS, WORLD_SIZE, type Box, type World, type Zone } from '@warbit/shared';
+import { BoxKind, Surface, TEAM_COLORS, WORLD_SIZE, type Box, type World, type Zone } from '@warbit/shared';
+import { Grass } from './grass';
 
 const SKY = 0xa9c9e8;
 
-/** Cena low-poly: terreno, construções mescladas, árvores instanciadas, zonas. Sem texturas, sem sombras dinâmicas. */
+const SURFACE_COLORS: Record<number, number[]> = {
+  [Surface.Grass]: [0x6e9a48, 0x86ab52],
+  [Surface.Road]: [0x8b8578, 0x7d786c],
+  [Surface.Field]: [0xb9a24c, 0xa89440],
+  [Surface.Dirt]: [0xa8946c, 0x9a875f],
+  [Surface.Forest]: [0x4d7a3a, 0x436b33],
+  [Surface.Concrete]: [0x9d9d97, 0x8f8f89],
+};
+
+/** Cena low-poly: terreno, construções mescladas, árvores/rochas instanciadas, zonas. */
 export class GameScene {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(75, 1, 0.08, 1400);
+  readonly camera = new THREE.PerspectiveCamera(75, 1, 0.05, 1400);
+  readonly grass: Grass;
   private czMesh: THREE.Mesh;
   private hzMesh: THREE.Mesh;
   private hzBeam: THREE.Mesh;
-  private sandbags = new Map<number, THREE.Mesh>();
-  private sandMat = new THREE.MeshLambertMaterial({ color: 0xb9a57c, flatShading: true });
-  private spawnPoles: THREE.Mesh[] = [];
+  private builds = new Map<number, THREE.Mesh>();
+  private matCache = new Map<number, THREE.MeshLambertMaterial>();
   quality = 1;
 
   constructor(canvas: HTMLCanvasElement, readonly world: World) {
@@ -28,8 +38,12 @@ export class GameScene {
 
     this.buildTerrain();
     this.buildBoxes();
+    this.buildRoofs();
     this.buildTrees();
+    this.buildRocks();
     this.buildBushes();
+    this.grass = new Grass(world, 1);
+    this.scene.add(this.grass.mesh);
 
     const czMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false, fog: false });
     this.czMesh = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 64, 1, true), czMat);
@@ -39,16 +53,14 @@ export class GameScene {
     this.czMesh.renderOrder = 2; this.hzMesh.renderOrder = 3; this.hzBeam.renderOrder = 3;
     this.scene.add(this.czMesh, this.hzMesh, this.hzBeam);
 
-    for (let t = 0; t < 3; t++) {
-      const pole = new THREE.Mesh(new THREE.BoxGeometry(0.5, 14, 0.5), new THREE.MeshBasicMaterial({ color: TEAM_COLORS[t] }));
-      this.spawnPoles.push(pole);
-      this.scene.add(pole);
-      // bandeira da base
-      const b = world.bases[t];
+    world.bases.forEach((b, t) => {
       const flag = new THREE.Mesh(new THREE.BoxGeometry(0.4, 18, 0.4), new THREE.MeshBasicMaterial({ color: TEAM_COLORS[t] }));
       flag.position.set(b.x, world.heightAt(b.x, b.z) + 9, b.z);
       this.scene.add(flag);
-    }
+      const cloth = new THREE.Mesh(new THREE.BoxGeometry(4.5, 2.6, 0.12), new THREE.MeshLambertMaterial({ color: TEAM_COLORS[t] }));
+      cloth.position.set(b.x + 2.4, world.heightAt(b.x, b.z) + 16, b.z);
+      this.scene.add(cloth);
+    });
     this.resize();
     addEventListener('resize', () => this.resize());
   }
@@ -66,27 +78,25 @@ export class GameScene {
   private buildTerrain() {
     const w = this.world, N = w.gridN, cell = w.cellSize, N1 = N + 1;
     const pos = new Float32Array(N1 * N1 * 3), colr = new Float32Array(N1 * N1 * 3);
-    const c = new THREE.Color(), grass = new THREE.Color(0x6e9a48), grass2 = new THREE.Color(0x86ab52), dirt = new THREE.Color(0xb09a72), rock = new THREE.Color(0x8d8a7c);
-    const flats = [...w.villages.map((v) => ({ ...v, r: 58 })), ...w.bases.map((b) => ({ ...b, r: 70 }))];
+    const c = new THREE.Color(), rock = new THREE.Color(0x8d8a7c), a = new THREE.Color(), b = new THREE.Color();
     for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
       const k = j * N1 + i, x = i * cell, z = j * cell, h = w.heights[k];
       pos[k * 3] = x; pos[k * 3 + 1] = h; pos[k * 3 + 2] = z;
       const hx = w.heightAt(x + cell, z) - w.heightAt(x - cell, z), hz = w.heightAt(x, z + cell) - w.heightAt(x, z - cell);
       const slope = Math.hypot(hx, hz) / (2 * cell);
       const n = (Math.sin(x * 0.07) * Math.cos(z * 0.053) + Math.sin(x * 0.011 + z * 0.017)) * 0.25 + 0.5;
-      c.copy(grass).lerp(grass2, n);
-      if (slope > 0.32) c.lerp(rock, Math.min(1, (slope - 0.32) * 4));
-      let dm = 0;
-      for (const f of flats) { const d = Math.hypot(f.x - x, f.z - z); if (d < f.r * 1.25) dm = Math.max(dm, Math.min(1, (f.r * 1.25 - d) / (f.r * 0.4))); }
-      if (dm > 0) c.lerp(dirt, dm * 0.85);
+      const pal = SURFACE_COLORS[w.surface[k]] ?? SURFACE_COLORS[Surface.Grass];
+      a.setHex(pal[0]); b.setHex(pal[1]);
+      c.copy(a).lerp(b, n);
+      if (slope > 0.34 && w.surface[k] === Surface.Grass) c.lerp(rock, Math.min(1, (slope - 0.34) * 4));
       c.multiplyScalar(0.92 + ((i * 7 + j * 13) % 5) * 0.02);
       colr[k * 3] = c.r; colr[k * 3 + 1] = c.g; colr[k * 3 + 2] = c.b;
     }
     const idx = new Uint32Array(N * N * 6);
     let o = 0;
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-      const a = j * N1 + i, b = a + 1, d = a + N1, e = d + 1;
-      idx[o++] = a; idx[o++] = d; idx[o++] = b; idx[o++] = b; idx[o++] = d; idx[o++] = e;
+      const aa = j * N1 + i, bb = aa + 1, d = aa + N1, e = d + 1;
+      idx[o++] = aa; idx[o++] = d; idx[o++] = bb; idx[o++] = bb; idx[o++] = d; idx[o++] = e;
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -96,14 +106,14 @@ export class GameScene {
     const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
     mesh.frustumCulled = false;
     this.scene.add(mesh);
-    // chão escuro além da borda
     const skirt = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_SIZE * 4, WORLD_SIZE * 4), new THREE.MeshBasicMaterial({ color: 0x5d7f42 }));
     skirt.rotation.x = -Math.PI / 2; skirt.position.set(WORLD_SIZE / 2, -6, WORLD_SIZE / 2);
     this.scene.add(skirt);
   }
 
+  /** Todas as caixas estáticas viram uma geometria só (cores por vértice). */
   private buildBoxes() {
-    const boxes = this.world.boxes.filter((b) => b.kind !== BoxKind.Tree && b.kind !== BoxKind.Sandbag);
+    const boxes = this.world.boxes.filter((b) => b.kind !== BoxKind.Tree && b.kind !== BoxKind.Rock && b.kind !== BoxKind.Sandbag && b.kind !== BoxKind.Fob);
     const pos: number[] = [], colr: number[] = [], nor: number[] = [];
     const c = new THREE.Color();
     const quad = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number, dx: number, dy: number, dz: number, nx: number, ny: number, nz: number, shade: number) => {
@@ -113,14 +123,14 @@ export class GameScene {
     for (const b of boxes) {
       c.setHex(b.color);
       const { x0, y0, z0, x1, y1, z1 } = b;
-      const roof = b.kind === BoxKind.Building ? 0.62 : 1.06;
+      const roof = b.kind === BoxKind.Building ? 0.62 : b.kind === BoxKind.Roof ? 0.9 : 1.06;
       quad(x0, y1, z0, x0, y1, z1, x1, y1, z1, x1, y1, z0, 0, 1, 0, roof);
       quad(x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1, 0, 0, 1, 1);
       quad(x1, y0, z0, x0, y0, z0, x0, y1, z0, x1, y1, z0, 0, 0, -1, 0.9);
       quad(x1, y0, z1, x1, y0, z0, x1, y1, z0, x1, y1, z1, 1, 0, 0, 0.96);
       quad(x0, y0, z0, x0, y0, z1, x0, y1, z1, x0, y1, z0, -1, 0, 0, 0.86);
       if (b.kind === BoxKind.Building) {
-        // janelas e porta: retângulos escuros levemente à frente da parede
+        // prédios sólidos: janelas pintadas (os prédios com interior vêm na etapa 4)
         c.setHex(0x2c3640);
         const gy = y0 + 4;
         const floors = Math.max(1, Math.round((y1 - gy) / 2.8));
@@ -146,8 +156,47 @@ export class GameScene {
     this.scene.add(mesh);
   }
 
+  /** Telhados de duas águas (decoração; a laje de cima é a colisão). */
+  private buildRoofs() {
+    const roofs = this.world.roofs;
+    if (!roofs.length) return;
+    const pos: number[] = [], colr: number[] = [], nor: number[] = [];
+    const c = new THREE.Color();
+    const tri = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number, shade: number) => {
+      const ux = bx - ax, uy = by - ay, uz = bz - az, vx = cx - ax, vy = cy - ay, vz = cz - az;
+      let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+      pos.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+      for (let i = 0; i < 3; i++) { nor.push(nx, ny, nz); colr.push(c.r * shade, c.g * shade, c.b * shade); }
+    };
+    for (const r of roofs) {
+      c.setHex(r.color);
+      const { x0, x1, z0, z1, y, h } = r;
+      const alongX = x1 - x0 >= z1 - z0;
+      if (alongX) {
+        const zm = (z0 + z1) / 2, ry = y + h;
+        tri(x0, y, z0, x1, y, z0, x1, ry, zm, 0.9); tri(x0, y, z0, x1, ry, zm, x0, ry, zm, 0.9);
+        tri(x1, y, z1, x0, y, z1, x0, ry, zm, 1.05); tri(x1, y, z1, x0, ry, zm, x1, ry, zm, 1.05);
+        tri(x0, y, z1, x0, y, z0, x0, ry, zm, 0.8); tri(x1, y, z0, x1, y, z1, x1, ry, zm, 0.8);
+      } else {
+        const xm = (x0 + x1) / 2, ry = y + h;
+        tri(x0, y, z1, x0, y, z0, xm, ry, z0, 1.0); tri(x0, y, z1, xm, ry, z0, xm, ry, z1, 1.0);
+        tri(x1, y, z0, x1, y, z1, xm, ry, z1, 0.88); tri(x1, y, z0, xm, ry, z1, xm, ry, z0, 0.88);
+        tri(x0, y, z0, x1, y, z0, xm, ry, z0, 0.8); tri(x1, y, z1, x0, y, z1, xm, ry, z1, 0.8);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(colr, 3));
+    const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+    mesh.frustumCulled = false;
+    this.scene.add(mesh);
+  }
+
   private buildTrees() {
     const trees = this.world.trees;
+    if (!trees.length) return;
     const trunk = new THREE.CylinderGeometry(0.16, 0.26, 1, 5).toNonIndexed(); trunk.translate(0, 0.5, 0);
     const leaf = new THREE.ConeGeometry(1, 1, 6).toNonIndexed();
     const paintG = (g: THREE.BufferGeometry, hex: number) => {
@@ -156,15 +205,10 @@ export class GameScene {
       g.setAttribute('color', new THREE.BufferAttribute(a, 3)); g.deleteAttribute('uv');
       return g;
     };
-    const makeTree = () => {
-      const parts: THREE.BufferGeometry[] = [];
-      const t = trunk.clone(); t.scale(1, 0.45, 1); parts.push(paintG(t, 0x6b4f35));
-      const l1 = leaf.clone(); l1.scale(0.42, 0.5, 0.42); l1.translate(0, 0.52, 0); parts.push(paintG(l1, 0x3f7a3a));
-      const l2 = leaf.clone(); l2.scale(0.32, 0.42, 0.32); l2.translate(0, 0.8, 0); parts.push(paintG(l2, 0x4c8c42));
-      return parts;
-    };
-    const parts = makeTree();
-    // mescla manual simples
+    const t = trunk.clone(); t.scale(1, 0.45, 1);
+    const l1 = leaf.clone(); l1.scale(0.42, 0.5, 0.42); l1.translate(0, 0.52, 0);
+    const l2 = leaf.clone(); l2.scale(0.32, 0.42, 0.32); l2.translate(0, 0.8, 0);
+    const parts = [paintG(t, 0x6b4f35), paintG(l1, 0x3f7a3a), paintG(l2, 0x4c8c42)];
     let total = 0; for (const p of parts) total += p.attributes.position.count;
     const pos = new Float32Array(total * 3), colr = new Float32Array(total * 3);
     let o = 0;
@@ -176,9 +220,9 @@ export class GameScene {
     const im = new THREE.InstancedMesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }), trees.length);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
     const col = new THREE.Color();
-    trees.forEach((t, i) => {
+    trees.forEach((tr, i) => {
       q.setFromAxisAngle(up, (i * 2.399) % (Math.PI * 2));
-      m.compose(p.set(t.x, t.y - 0.2, t.z), q, s.set(t.h * t.s * 0.75, t.h, t.h * t.s * 0.75));
+      m.compose(p.set(tr.x, tr.y - 0.2, tr.z), q, s.set(tr.h * tr.s * 0.75, tr.h, tr.h * tr.s * 0.75));
       im.setMatrixAt(i, m);
       const k = 0.85 + ((i * 31) % 10) * 0.03;
       im.setColorAt(i, col.setRGB(k, k, k));
@@ -187,10 +231,30 @@ export class GameScene {
     this.scene.add(im);
   }
 
+  private buildRocks() {
+    const rocks = this.world.rocks;
+    if (!rocks.length) return;
+    const g = new THREE.IcosahedronGeometry(1, 0);
+    const pos = g.attributes.position;
+    for (let i = 0; i < pos.count; i++) pos.setY(i, pos.getY(i) * 0.75);
+    g.computeVertexNormals();
+    const im = new THREE.InstancedMesh(g, new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), rocks.length);
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+    const col = new THREE.Color();
+    rocks.forEach((r, i) => {
+      q.setFromAxisAngle(up, r.rot);
+      m.compose(p.set(r.x, r.y + r.s * 0.2, r.z), q, s.set(r.s * 0.9, r.s * 0.8, r.s * 0.9));
+      im.setMatrixAt(i, m);
+      const k = 0.78 + ((i * 17) % 7) * 0.04;
+      im.setColorAt(i, col.setRGB(k, k, k * 0.97));
+    });
+    im.frustumCulled = false;
+    this.scene.add(im);
+  }
+
   private buildBushes() {
     const bushes = this.world.bushes;
     if (!bushes.length) return;
-    // duas bolas facetadas mescladas = uma moita (40 triângulos)
     const a = new THREE.IcosahedronGeometry(1, 0); a.scale(1, 0.62, 1); a.translate(0, 0.5, 0);
     const b = new THREE.IcosahedronGeometry(0.7, 0); b.scale(1, 0.7, 1); b.translate(0.55, 0.42, 0.3);
     const n = a.attributes.position.count + b.attributes.position.count;
@@ -214,7 +278,7 @@ export class GameScene {
     this.scene.add(im);
   }
 
-  setZones(cz: Zone, hz: Zone, spawns: { x: number; z: number }[]) {
+  setZones(cz: Zone, hz: Zone) {
     const w = this.world;
     const cy = w.heightAt(cz.x, cz.z);
     this.czMesh.scale.set(cz.r, 90, cz.r);
@@ -224,23 +288,25 @@ export class GameScene {
     this.hzMesh.position.set(hz.x, hy + 22, hz.z);
     this.hzBeam.scale.set(1, 400, 1);
     this.hzBeam.position.set(hz.x, hy + 200, hz.z);
-    spawns.forEach((s, t) => this.spawnPoles[t]?.position.set(s.x, w.heightAt(s.x, s.z) + 7, s.z));
   }
 
-  addSandbag(b: Box) {
-    if (this.sandbags.has(b.id)) return;
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0), this.sandMat);
+  /** Construções do jogador (sacos de areia, FOB): caixas com a cor que o servidor mandou. */
+  addBuild(b: Box) {
+    if (this.builds.has(b.id)) return;
+    let mt = this.matCache.get(b.color);
+    if (!mt) this.matCache.set(b.color, (mt = new THREE.MeshLambertMaterial({ color: b.color, flatShading: true })));
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0), mt);
     mesh.position.set((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2);
     this.scene.add(mesh);
-    this.sandbags.set(b.id, mesh);
+    this.builds.set(b.id, mesh);
   }
 
-  removeSandbag(id: number) {
-    const m = this.sandbags.get(id);
+  removeBuild(id: number) {
+    const m = this.builds.get(id);
     if (!m) return;
     this.scene.remove(m);
     m.geometry.dispose();
-    this.sandbags.delete(id);
+    this.builds.delete(id);
   }
 
   render() {

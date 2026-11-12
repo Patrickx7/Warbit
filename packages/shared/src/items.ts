@@ -1,9 +1,10 @@
 import { RECRUIT_DISCOUNT, RECRUIT_DISCOUNT_MAX_LEVEL } from './config';
 
-export type Slot = 'primary' | 'secondary' | 'armor' | 'helmet' | 'vest' | 'tool';
-export type Track = 'Básico' | 'Assalto' | 'Infantaria' | 'Médica' | 'Construção' | 'Recon' | 'Suporte' | 'Veículos';
+export type Slot = 'primary' | 'secondary' | 'armor' | 'helmet' | 'vest' | 'tool' | 'sight';
+export type SightKind = 'reddot' | 'holo' | 'scope';
+export type Track = 'Miras' | 'Básico' | 'Assalto' | 'Infantaria' | 'Médica' | 'Construção' | 'Recon' | 'Suporte' | 'Veículos';
 export type WeaponClass = 'pistol' | 'rifle' | 'smg' | 'shotgun' | 'sniper';
-export type ToolKind = 'revive' | 'defib' | 'medbag' | 'frag' | 'build' | 'mark';
+export type ToolKind = 'revive' | 'defib' | 'medbag' | 'frag' | 'build' | 'mark' | 'fob';
 
 export interface WeaponStats {
   cls: WeaponClass;
@@ -37,6 +38,7 @@ export interface Item {
   helmet?: number;    // nível 1-4
   mags?: number;      // carregadores extras (colete)
   tool?: ToolKind;
+  sight?: { zoom: number; kind: SightKind; sniperOnly?: boolean }; // zoom = multiplicador de FOV ao mirar (menor = mais aproximado)
   soon?: boolean;     // listado, mas ainda não disponível (Fase 2)
 }
 
@@ -71,6 +73,13 @@ const DEFS: Def[] = [
   // --- metralhadoras (Fase 2) ---
   { id: 'mtr_leve', name: 'Metralhadora leve', slot: 'primary', track: 'Suporte', price: 3200, level: 5, desc: 'Fase 2.', soon: true },
   { id: 'mtr_media', name: 'Metralhadora média', slot: 'primary', track: 'Suporte', price: 4300, level: 8, desc: 'Fase 2.', soon: true },
+  // --- miras (preços estimados: o WarDogs não publicou) ---
+  { id: 'mira_pontovermelho', name: 'Mira ponto vermelho', slot: 'sight', track: 'Miras', price: 350, level: 1, desc: 'Ponto vermelho em janela aberta. Pequeno aumento.', sight: { zoom: 0.8, kind: 'reddot' } },
+  { id: 'mira_holografica', name: 'Mira holográfica', slot: 'sight', track: 'Miras', price: 600, level: 2, desc: 'Retículo em anel, rápido de alinhar.', sight: { zoom: 0.76, kind: 'holo' } },
+  { id: 'mira_2x', name: 'Mira 2x', slot: 'sight', track: 'Miras', price: 500, level: 2, desc: 'Luneta curta de 2 aumentos.', sight: { zoom: 0.52, kind: 'scope' } },
+  { id: 'mira_4x', name: 'Luneta 4x', slot: 'sight', track: 'Miras', price: 900, level: 4, desc: 'Luneta de 4 aumentos.', sight: { zoom: 0.27, kind: 'scope' } },
+  { id: 'mira_6x', name: 'Luneta 6x', slot: 'sight', track: 'Miras', price: 1400, level: 6, desc: 'Só para armas de precisão.', sight: { zoom: 0.18, kind: 'scope', sniperOnly: true } },
+  { id: 'mira_8x', name: 'Luneta 8x', slot: 'sight', track: 'Miras', price: 2000, level: 8, desc: 'Só para armas de precisão. Longuíssimo alcance.', sight: { zoom: 0.13, kind: 'scope', sniperOnly: true } },
   // --- coletes táticos (munição) ---
   { id: 'colete_p', name: 'Colete tático P', slot: 'vest', track: 'Infantaria', price: 100, level: 1, desc: '+2 carregadores.', mags: 2 },
   { id: 'colete_m', name: 'Colete tático M', slot: 'vest', track: 'Infantaria', price: 250, level: 1, desc: '+4 carregadores.', mags: 4 },
@@ -97,6 +106,7 @@ const DEFS: Def[] = [
   { id: 'pe_de_cabra', name: 'Pé de cabra de arrombamento', slot: 'tool', track: 'Construção', price: 885, level: 3, desc: 'Em breve.', soon: true },
   // --- construção ---
   { id: 'ferramenta_obra', name: 'Ferramenta de obra', slot: 'tool', track: 'Construção', price: 1000, level: 2, desc: '[B] ergue sacos de areia. 5 usos.', tool: 'build' },
+  { id: 'kit_fob', name: 'Kit de FOB', slot: 'tool', track: 'Construção', price: 2500, level: 3, desc: '[F] ergue uma posição fortificada: caixa de suprimentos (munição e cura) e sacos de areia. Uma por time.', tool: 'fob' },
   { id: 'kit_reparo', name: 'Kit de reparo', slot: 'tool', track: 'Construção', price: 600, level: 2, desc: 'Fase 2 (veículos).', soon: true },
   // --- recon ---
   { id: 'binoculo', name: 'Binóculo marcador', slot: 'tool', track: 'Recon', price: 500, level: 1, desc: '[Q] marca o inimigo na mira para o time.', tool: 'mark' },
@@ -130,6 +140,7 @@ export interface Loadout {
   armor?: Item;
   helmet?: Item;
   vest?: Item;
+  sight?: Item;
   tools: Item[];
   cost: number;
 }
@@ -138,7 +149,7 @@ export type LoadoutResult = { ok: true; loadout: Loadout } | { ok: false; error:
 
 /** Valida uma lista de ids de itens e calcula o custo. Usado pelo servidor (autoridade) e pelo cliente (pré-visualização). */
 export function buildLoadout(ids: string[], level: number, cash: number): LoadoutResult {
-  let primary: Item | undefined, secondary: Item | undefined, armor: Item | undefined, helmet: Item | undefined, vest: Item | undefined;
+  let primary: Item | undefined, secondary: Item | undefined, armor: Item | undefined, helmet: Item | undefined, vest: Item | undefined, sight: Item | undefined;
   const tools: Item[] = [];
   const seen = new Set<string>();
   for (const id of ids) {
@@ -154,6 +165,7 @@ export function buildLoadout(ids: string[], level: number, cash: number): Loadou
       case 'armor': if (armor) return { ok: false, error: 'Só uma blindagem' }; armor = it; break;
       case 'helmet': if (helmet) return { ok: false, error: 'Só um capacete' }; helmet = it; break;
       case 'vest': if (vest) return { ok: false, error: 'Só um colete' }; vest = it; break;
+      case 'sight': if (sight) return { ok: false, error: 'Só uma mira' }; sight = it; break;
       case 'tool': tools.push(it); break;
     }
   }
@@ -161,18 +173,19 @@ export function buildLoadout(ids: string[], level: number, cash: number): Loadou
   if (tools.some((t) => t.tool === 'revive') && tools.some((t) => t.tool === 'defib')) return { ok: false, error: 'Reanimador e desfibrilador não combinam' };
   primary ??= ITEM_BY_ID[FREE_PRIMARY];
   secondary ??= ITEM_BY_ID[FREE_SECONDARY];
-  const all = [primary, secondary, armor, helmet, vest, ...tools].filter(Boolean) as Item[];
+  if (sight?.sight?.sniperOnly && primary.weapon?.cls !== 'sniper') return { ok: false, error: `${sight.name} só serve em arma de precisão` };
+  const all = [primary, secondary, armor, helmet, vest, sight, ...tools].filter(Boolean) as Item[];
   const cost = all.reduce((s, it) => s + priceFor(it, level), 0);
   if (cost > cash) return { ok: false, error: 'Saldo insuficiente' };
-  return { ok: true, loadout: { primary, secondary, armor, helmet, vest, tools, cost } };
+  return { ok: true, loadout: { primary, secondary, armor, helmet, vest, sight, tools, cost } };
 }
 
-/** Presets de compra rápida — os papéis clássicos montados com um clique. */
+/** Kits que os bots compram (jogadores montam o próprio na loja). */
 export const PRESETS: { name: string; items: string[] }[] = [
   { name: 'Recruta (grátis)', items: ['fuzil_basico', 'pistola'] },
-  { name: 'Infantaria', items: ['fuzil_padrao', 'pistola', 'blind_1', 'capacete_1', 'colete_m', 'granada'] },
-  { name: 'Assalto', items: ['smg_compacta', 'pistola', 'blind_1', 'capacete_1', 'granada'] },
+  { name: 'Infantaria', items: ['fuzil_padrao', 'pistola', 'blind_1', 'capacete_1', 'colete_m', 'reanimador'] },
+  { name: 'Assalto', items: ['smg_compacta', 'pistola', 'blind_1', 'capacete_1', 'granada', 'reanimador'] },
   { name: 'Médico', items: ['fuzil_leve', 'pistola', 'blind_1', 'reanimador', 'bolsa_medica'] },
-  { name: 'Construtor', items: ['fuzil_leve', 'pistola', 'blind_1', 'capacete_1', 'ferramenta_obra'] },
-  { name: 'Recon', items: ['carabina_scout', 'pistola', 'binoculo', 'colete_p'] },
+  { name: 'Construtor', items: ['fuzil_leve', 'pistola', 'blind_1', 'ferramenta_obra', 'kit_fob', 'reanimador'] },
+  { name: 'Recon', items: ['carabina_scout', 'pistola', 'binoculo', 'colete_p', 'reanimador'] },
 ];

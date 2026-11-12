@@ -42,6 +42,9 @@ export class Player {
   hasRevive = false;
   hasDefib = false;
   hasMark = false;
+  hasFob = false;
+  maxReserve = [0, 0];
+  lastAttacker = -1;
   healReady = 0;
   markReady = 0;
 

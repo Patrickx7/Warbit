@@ -16,7 +16,6 @@ export const WORLD_SIZE = 1500;
 export const CZ_RADIUS = 150; // Control Zone
 export const HZ_RADIUS = 30; // Hot Zone
 export const HZ_MOVE_SECONDS = 120;
-export const FORWARD_SPAWN_DIST = 160; // distância do acampamento avançado até a borda da CZ
 
 // Pontuação
 export const SCORE_TO_WIN = 100;
@@ -31,13 +30,26 @@ export const PLAYER_HEIGHT = 1.8;
 export const CROUCH_HEIGHT = 1.25;
 export const EYE_HEIGHT = 1.62;
 export const CROUCH_EYE_HEIGHT = 1.05;
-export const WALK_SPEED = 5.2;
-export const SPRINT_SPEED = 7.8;
-export const CROUCH_SPEED = 2.6;
-export const JUMP_SPEED = 7.2;
+export const PRONE_HEIGHT = 0.55;
+export const PRONE_EYE_HEIGHT = 0.4;
+export const WALK_SPEED = 3.6;
+export const SPRINT_SPEED = 6.0;
+export const CROUCH_SPEED = 1.8;
+export const PRONE_SPEED = 0.85;
+export const JUMP_SPEED = 5.6;
 export const GRAVITY = 22;
 export const STEP_HEIGHT = 0.6;
 export const MAX_HP = 100;
+export const STAMINA_DRAIN = 1 / 11; // fôlego: ~11 s de corrida
+export const STAMINA_REGEN = 1 / 7;
+export const STAMINA_RESUME = 0.3; // cansado: só volta a correr com 30%
+export const SPRINT_FLAG_SPEED = 4.6;
+export const RESPAWN_SECONDS = 10;
+
+// FOB (posição fortificada construída pelo time)
+export const FOB_HP = 300;
+export const FOB_RADIUS = 10; // raio de reabastecimento
+export const FOB_MIN_BASE_DIST = 160;
 
 // Vida / morte
 export const DOWNED_SECONDS = 20; // tempo caído esperando médico
