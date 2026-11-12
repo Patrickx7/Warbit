@@ -19,6 +19,7 @@ const CATS: Cat[] = [
   { id: 'secondary', label: 'Arma secundária', match: (i) => i.slot === 'secondary' && !i.soon },
   { id: 'sight', label: 'Miras', match: (i) => i.slot === 'sight' },
   { id: 'armor', label: 'Proteção', match: (i) => (i.slot === 'armor' || i.slot === 'helmet' || i.slot === 'vest') && !i.soon },
+  { id: 'pack', label: 'Mochilas', match: (i) => i.slot === 'pack' },
   { id: 'medic', label: 'Médico', match: (i) => i.slot === 'tool' && i.track === 'Médica' && !i.soon },
   { id: 'build', label: 'Construção', match: (i) => i.slot === 'tool' && i.track === 'Construção' && !i.soon },
   { id: 'recon', label: 'Recon', match: (i) => i.slot === 'tool' && i.track === 'Recon' && !i.soon },
@@ -36,8 +37,13 @@ const GUN_SVG: Record<string, string> = {
 const sightSvg = (it: Item) => it.sight!.kind === 'scope'
   ? '<rect x="8" y="10" width="48" height="10" rx="4"/><rect x="2" y="8" width="8" height="14" rx="2"/><rect x="54" y="8" width="8" height="14" rx="2"/><rect x="26" y="20" width="10" height="6"/>'
   : '<rect x="10" y="6" width="40" height="3"/><rect x="10" y="21" width="40" height="3"/><rect x="10" y="6" width="3" height="18"/><rect x="47" y="6" width="3" height="18"/><circle cx="30" cy="15" r="2" fill="#ff4a4a"/>';
+const packSvg = (t: number) => t === 1
+  ? '<rect x="28" y="6" width="24" height="22" rx="4"/><rect x="30" y="3" width="20" height="6" rx="2"/>'
+  : t === 2
+    ? '<rect x="24" y="8" width="32" height="22" rx="4"/><rect x="22" y="2" width="36" height="7" rx="3"/><rect x="18" y="14" width="6" height="12" rx="2"/><rect x="56" y="14" width="6" height="12" rx="2"/>'
+    : '<rect x="22" y="4" width="36" height="26" rx="5"/><rect x="14" y="10" width="8" height="16" rx="2"/><rect x="58" y="10" width="8" height="16" rx="2"/><rect x="28" y="16" width="24" height="12" rx="2" fill="#7d6e3c"/><rect x="26" y="0" width="28" height="6" rx="2"/>';
 function silhouette(it: Item): string {
-  const body = it.weapon ? GUN_SVG[it.weapon.cls] : it.sight ? sightSvg(it) : '';
+  const body = it.weapon ? GUN_SVG[it.weapon.cls] : it.sight ? sightSvg(it) : it.pack ? packSvg(it.pack) : '';
   if (!body) return '';
   return `<svg viewBox="0 0 80 30" class="sil">${body}</svg>`;
 }
@@ -63,6 +69,8 @@ export class UI {
   private mmZoomIdx = 1;
   private static readonly MM_ZOOMS = [0.22, 0.45, 0.9, 1.8]; // pixels por metro
   onSpawn: (items: string[]) => void = () => {};
+  /** chamado a cada mudança no carrinho: atualiza a prévia 3D do soldado */
+  onPreview: (look: { armor: number; helmet: number; pack: number; gunCls: string }) => void = () => {};
 
   constructor() {
     try { this.lastBuy = (JSON.parse(localStorage.getItem('warbit.lastBuy') ?? '[]') as string[]).filter((id) => ITEM_BY_ID[id]); } catch { /* sem armazenamento */ }
@@ -285,6 +293,7 @@ export class UI {
       rows.push({ label: 'Blindagem', item: lo.armor });
       rows.push({ label: 'Capacete', item: lo.helmet });
       rows.push({ label: 'Colete', item: lo.vest });
+      rows.push({ label: 'Mochila', item: lo.pack });
       for (let k = 0; k < MAX_TOOLS; k++) rows.push({ label: k === 0 ? 'Ferramentas' : '', item: lo.tools[k] });
     }
     slots.innerHTML = rows.map((r) => {
@@ -294,6 +303,10 @@ export class UI {
       return `<div class="slot"><label>${r.label}</label>${body}</div>`;
     }).join('');
     for (const b of Array.from(slots.querySelectorAll('button')) as HTMLButtonElement[]) b.onclick = () => { this.sel.delete(b.dataset.id!); this.renderShop(); };
+    if (res.ok) {
+      const lo = res.loadout;
+      this.onPreview({ armor: lo.armor?.armor ?? 0, helmet: lo.helmet?.helmet ?? 0, pack: lo.pack?.pack ?? 0, gunCls: lo.primary.weapon?.cls ?? 'rifle' });
+    }
     const cost = res.ok ? res.loadout.cost : 0;
     $('totalV').textContent = money(cost);
     const after = this.profile.cash - cost;

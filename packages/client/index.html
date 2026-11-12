@@ -133,6 +133,10 @@
   .bar b.bad { background: #d9743a; }
   #cart { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
   #cart h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); }
+  #cart { overflow-y: auto; padding-right: 4px; }
+  #cart > * { flex: none; }
+  #slots { flex: none !important; max-height: none !important; }
+  #preview { width: 100%; height: clamp(150px, 26vh, 240px); flex: none; display: block; border-radius: 8px; background: radial-gradient(ellipse at 50% 60%, #2a333b 0%, #12161a 75%); }
   #slots { flex: 1; overflow-y: auto; background: #12161a; border-radius: 8px; padding: 6px 8px; }
   .slot { display: grid; grid-template-columns: 78px 1fr auto 20px; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,.05); min-height: 28px; }
   .slot label { color: var(--dim); font-size: 11.5px; }
@@ -241,6 +245,7 @@
     <div id="items"></div>
     <aside id="cart">
       <h3>Seu equipamento</h3>
+      <canvas id="preview"></canvas>
       <div id="slots"></div>
       <div class="tot"><span>Total desta compra</span><b id="totalV">$0</b></div>
       <div class="tot"><span>Saldo depois</span><b id="afterV">$0</b></div>

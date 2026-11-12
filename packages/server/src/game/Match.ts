@@ -274,7 +274,7 @@ export class Match {
     p.loadout = lo;
     p.lifeProfit = 0;
     p.profileDirty = true; p.saveDirty = true;
-    const mags = BASE_MAGS + (lo.vest?.mags ?? 0);
+    const mags = BASE_MAGS + (lo.vest?.mags ?? 0) + (lo.pack?.mags ?? 0);
     const pw = lo.primary.weapon!, sw = lo.secondary.weapon!;
     p.ammo = [pw.mag, sw.mag];
     p.reserve = [pw.mag * mags, sw.mag * 3];
@@ -768,7 +768,7 @@ export class Match {
       const lo = p.loadout;
       this.ents[p.id] = {
         id: p.id, x: p.ms.x, y: p.ms.y, z: p.ms.z, yaw: p.yaw, pitch: p.pitch, life: p.life, crouch: p.ms.crouch, prone: p.ms.prone, sprint: p.sprinting,
-        marked: false, team: p.team, armor: lo?.armor?.armor ?? 0, helmet: lo?.helmet?.helmet ?? 0,
+        marked: false, team: p.team, armor: lo?.armor?.armor ?? 0, helmet: lo?.helmet?.helmet ?? 0, pack: lo?.pack?.pack ?? 0,
         weapon: lo ? (p.slot === 0 ? lo.primary.idx : lo.secondary.idx) : 0, shot: p.shot, hp: p.hp,
       };
     }

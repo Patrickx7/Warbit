@@ -56,6 +56,7 @@ export interface EntityState {
   team: number;
   armor: number;     // 0-4
   helmet: number;    // 0-4
+  pack: number;      // 0-3 (tamanho da mochila)
   weapon: number;    // índice do item na mão
   shot: number;      // contador de tiros (u8, dá a volta)
   hp: number;
@@ -121,7 +122,7 @@ export function encodeSnapshot(s: Snapshot): ArrayBuffer {
     v.setUint8(o + 7, Math.round((yaw / TWO_PI) * 256) & 255);
     v.setInt8(o + 8, Math.max(-127, Math.min(127, Math.round((e.pitch / 1.6) * 127))));
     v.setUint8(o + 9, (e.life & 3) | (e.crouch ? 4 : 0) | ((e.team & 3) << 3) | (e.sprint ? 32 : 0) | (e.marked ? 64 : 0) | (e.prone ? 128 : 0));
-    v.setUint8(o + 10, (e.armor & 7) | ((e.helmet & 7) << 3));
+    v.setUint8(o + 10, (e.armor & 7) | ((e.helmet & 7) << 3) | ((e.pack & 3) << 6));
     v.setUint8(o + 11, e.weapon);
     v.setUint8(o + 12, e.shot & 255);
     v.setUint8(o + 13, Math.max(0, Math.min(255, Math.ceil(e.hp))));
@@ -154,7 +155,7 @@ export function decodeSnapshot(v: DataView): Snapshot {
       yaw: (v.getUint8(o + 7) / 256) * TWO_PI,
       pitch: (v.getInt8(o + 8) / 127) * 1.6,
       life: f & 3, crouch: (f & 4) !== 0, prone: (f & 128) !== 0, team: (f >> 3) & 3, sprint: (f & 32) !== 0, marked: (f & 64) !== 0,
-      armor: g & 7, helmet: (g >> 3) & 7,
+      armor: g & 7, helmet: (g >> 3) & 7, pack: (g >> 6) & 3,
       weapon: v.getUint8(o + 11), shot: v.getUint8(o + 12), hp: v.getUint8(o + 13),
     };
     o += ENTITY_BYTES;

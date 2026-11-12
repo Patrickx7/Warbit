@@ -9,13 +9,14 @@ import {
 import { Sfx } from './audio';
 import { Fx } from './render/fx';
 import { GameScene } from './render/scene';
-import { GUN_KIND, Soldiers, type SoldierPose } from './render/soldiers';
+import { GUN_KIND, Soldiers, TEAM_LOOK, type SoldierPose } from './render/soldiers';
+import { SoldierPreview } from './render/preview';
 import { ViewModel } from './render/viewmodel';
 import { UI, esc, type MapDot, type MapFob } from './ui';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('game');
-const UNIFORM = [0x3f5fa8, 0xad473d, 0x4c8c45];
+const UNIFORM = TEAM_LOOK.map((l) => l.jacket);
 const BASE_FOV = 75;
 const DEG = Math.PI / 180;
 const KEYS_TO_LOCK = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyC', 'KeyZ', 'KeyQ', 'KeyE', 'KeyR', 'KeyF', 'KeyB', 'KeyG', 'KeyH', 'KeyN', 'ControlLeft'];
@@ -25,7 +26,7 @@ interface Ent { samples: Sample[]; s: EntityState; shot: number; x: number; y: n
 
 const dir = { x: 0, y: 0, z: 0 };
 const tmpV = new THREE.Vector3();
-const pose: SoldierPose = { id: 0, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, crouch: false, prone: false, sprint: false, downed: false, team: 0, armor: 0, helmet: 0, gun: 0, marker: 0, camo: 0, dist: 0 };
+const pose: SoldierPose = { id: 0, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, crouch: false, prone: false, sprint: false, downed: false, team: 0, armor: 0, helmet: 0, gun: 0, marker: 0, camo: 0, pack: 0, dist: 0 };
 
 function lerpAngle(a: number, b: number, t: number) {
   let d = (b - a) % (Math.PI * 2);
@@ -36,6 +37,7 @@ function lerpAngle(a: number, b: number, t: number) {
 class Game {
   ui = new UI();
   sfx = new Sfx();
+  preview = new SoldierPreview($<HTMLCanvasElement>('preview'));
   ws: WebSocket | null = null;
   world!: World;
   gs!: GameScene;
@@ -518,7 +520,7 @@ class Game {
       const ally = st.team === this.myTeam;
       const downed = st.life === LIFE_DOWNED;
       pose.id = id; pose.x = e.x; pose.y = e.y; pose.z = e.z; pose.yaw = e.yaw; pose.pitch = e.pitch;
-      pose.crouch = st.crouch; pose.prone = st.prone; pose.sprint = st.sprint; pose.downed = downed; pose.team = st.team; pose.armor = st.armor; pose.helmet = st.helmet;
+      pose.crouch = st.crouch; pose.prone = st.prone; pose.sprint = st.sprint; pose.downed = downed; pose.team = st.team; pose.armor = st.armor; pose.helmet = st.helmet; pose.pack = st.pack;
       pose.gun = GUN_KIND[ITEMS[st.weapon]?.weapon?.cls ?? 'rifle'] ?? 0;
       pose.dist = Math.hypot(e.x - cam.position.x, e.z - cam.position.z);
       pose.marker = ally ? 1 : st.marked ? 2 : 0;
@@ -545,6 +547,7 @@ class Game {
     this.lastYaw = this.yaw; this.lastPitch = this.pitch;
     this.fx.update(dt);
     this.gs.render();
+    if (!$('shop').classList.contains('hidden')) this.preview.render(now);
 
     // HUD (10 Hz)
     if (now - this.hudAt > 100) {
@@ -628,6 +631,7 @@ class Game {
       if (!this.ws) this.connect(name);
     };
     this.ui.onSpawn = (items) => this.spawn(items);
+    this.ui.onPreview = (look) => this.preview.set(look, this.myTeam);
     try { $<HTMLInputElement>('name').value = localStorage.getItem('warbit.name') ?? ''; } catch { /* ignora */ }
   }
 }
@@ -674,7 +678,7 @@ function runBench() {
       const x = c.x + Math.cos(ang) * ring, z = c.z + Math.sin(ang) * ring;
       pose.id = i; pose.x = x; pose.z = z; pose.y = world.groundAt(x, z, world.heightAt(x, z) + 0.3, 0.4);
       pose.yaw = (i % 2 ? -ang : -ang + Math.PI); pose.pitch = Math.sin(t + i) * 0.2;
-      pose.crouch = i % 9 === 0; pose.prone = i % 13 === 0; pose.sprint = sp > 5; pose.downed = i % 23 === 0; pose.team = i % 3; pose.armor = i % 5; pose.helmet = (i * 3) % 5; pose.gun = i % 4;
+      pose.crouch = i % 9 === 0; pose.prone = i % 13 === 0; pose.sprint = sp > 5; pose.downed = i % 23 === 0; pose.team = i % 3; pose.armor = i % 5; pose.helmet = (i * 3) % 5; pose.pack = i % 4; pose.gun = i % 4;
       pose.marker = i % 3 === 0 ? 1 : i % 17 === 0 ? 2 : 0;
       pose.camo = 0;
       if (focus && i < 3) {
