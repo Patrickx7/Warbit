@@ -13,6 +13,10 @@ export const TEAM_CSS = ['#3b82f6', '#ef4444', '#22c55e'] as const;
 
 // Mundo
 export const WORLD_SIZE = 1500;
+export const BUSH_RADIUS_MIN = 1.0;
+export const BUSH_RADIUS_MAX = 1.6;
+export const BUSH_HEIGHT_MIN = 1.2;
+export const BUSH_HEIGHT_MAX = 1.8;
 export const CZ_RADIUS = 150; // Control Zone
 export const HZ_RADIUS = 30; // Hot Zone
 export const HZ_MOVE_SECONDS = 120;

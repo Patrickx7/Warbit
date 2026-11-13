@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { BoxKind, Surface, TEAM_COLORS, WORLD_SIZE, type Box, type World, type Zone } from '@warbit/shared';
 import { Grass } from './grass';
+import { buildRoads } from './roads';
+import { buildIndustry } from './industry';
 
 const SKY = 0xa9c9e8;
 
@@ -37,6 +39,8 @@ export class GameScene {
     this.scene.add(this.camera);
 
     this.buildTerrain();
+    this.scene.add(buildRoads(world));
+    this.scene.add(buildIndustry(world));
     this.buildBoxes();
     this.buildRoofs();
     this.buildTrees();
@@ -78,16 +82,25 @@ export class GameScene {
   private buildTerrain() {
     const w = this.world, N = w.gridN, cell = w.cellSize, N1 = N + 1;
     const pos = new Float32Array(N1 * N1 * 3), colr = new Float32Array(N1 * N1 * 3);
+    const uv = new Float32Array(N1 * N1 * 2);
     const c = new THREE.Color(), rock = new THREE.Color(0x8d8a7c), a = new THREE.Color(), b = new THREE.Color();
     for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
       const k = j * N1 + i, x = i * cell, z = j * cell, h = w.heights[k];
       pos[k * 3] = x; pos[k * 3 + 1] = h; pos[k * 3 + 2] = z;
+      uv[k * 2] = x / 6; uv[k * 2 + 1] = z / 6;
       const hx = w.heightAt(x + cell, z) - w.heightAt(x - cell, z), hz = w.heightAt(x, z + cell) - w.heightAt(x, z - cell);
       const slope = Math.hypot(hx, hz) / (2 * cell);
       const n = (Math.sin(x * 0.07) * Math.cos(z * 0.053) + Math.sin(x * 0.011 + z * 0.017)) * 0.25 + 0.5;
       const pal = SURFACE_COLORS[w.surface[k]] ?? SURFACE_COLORS[Surface.Grass];
       a.setHex(pal[0]); b.setHex(pal[1]);
       c.copy(a).lerp(b, n);
+      // Suaviza o limite das superfícies sem alterar o chão usado pela simulação.
+      for (const [di, dj] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+        const ni = Math.max(0, Math.min(N, i + di)), nj = Math.max(0, Math.min(N, j + dj));
+        const neighbor = SURFACE_COLORS[w.surface[nj * N1 + ni]] ?? SURFACE_COLORS[Surface.Grass];
+        a.setHex(neighbor[0]); b.setHex(neighbor[1]);
+        c.lerp(a.lerp(b, n), .08);
+      }
       if (slope > 0.34 && w.surface[k] === Surface.Grass) c.lerp(rock, Math.min(1, (slope - 0.34) * 4));
       c.multiplyScalar(0.92 + ((i * 7 + j * 13) % 5) * 0.02);
       colr[k * 3] = c.r; colr[k * 3 + 1] = c.g; colr[k * 3 + 2] = c.b;
@@ -101,9 +114,24 @@ export class GameScene {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('color', new THREE.BufferAttribute(colr, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     g.setIndex(new THREE.BufferAttribute(idx, 1));
     g.computeVertexNormals();
-    const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 128;
+    const ctx = canvas.getContext('2d')!, pixels = ctx.createImageData(128, 128);
+    let seed = 8731;
+    for (let p = 0; p < pixels.data.length; p += 4) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      const shade = 204 + (seed >>> 26) * .8;
+      pixels.data[p] = pixels.data[p + 1] = pixels.data[p + 2] = shade;
+      pixels.data[p + 3] = 255;
+    }
+    ctx.putImageData(pixels, 0, 0);
+    const detail = new THREE.CanvasTexture(canvas);
+    detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
+    detail.colorSpace = THREE.SRGBColorSpace;
+    detail.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy());
+    const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, map: detail }));
     mesh.frustumCulled = false;
     this.scene.add(mesh);
     const skirt = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_SIZE * 4, WORLD_SIZE * 4), new THREE.MeshBasicMaterial({ color: 0x5d7f42 }));
@@ -113,7 +141,7 @@ export class GameScene {
 
   /** Todas as caixas estáticas viram uma geometria só (cores por vértice). */
   private buildBoxes() {
-    const boxes = this.world.boxes.filter((b) => b.kind !== BoxKind.Tree && b.kind !== BoxKind.Rock && b.kind !== BoxKind.Sandbag && b.kind !== BoxKind.Fob);
+    const boxes = [...this.world.boxes.filter((b) => b.kind !== BoxKind.Tree && b.kind !== BoxKind.Rock && b.kind !== BoxKind.Sandbag && b.kind !== BoxKind.Fob && b.kind !== BoxKind.Industrial), ...this.world.details];
     const pos: number[] = [], colr: number[] = [], nor: number[] = [];
     const c = new THREE.Color();
     const quad = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number, dx: number, dy: number, dz: number, nx: number, ny: number, nz: number, shade: number) => {
@@ -130,6 +158,17 @@ export class GameScene {
       quad(x1, y0, z1, x1, y0, z0, x1, y1, z0, x1, y1, z1, 1, 0, 0, 0.96);
       quad(x0, y0, z0, x0, y0, z1, x0, y1, z1, x0, y1, z0, -1, 0, 0, 0.86);
       if (b.kind === BoxKind.Building) {
+        const cx = (x0 + x1) / 2, ground = this.world.heightAt(cx, z1);
+        c.setHex(0x384047);
+        quad(cx - .7, ground, z1 + .04, cx + .7, ground, z1 + .04, cx + .7, ground + 2.3, z1 + .04, cx - .7, ground + 2.3, z1 + .04, 0, 0, 1, 1);
+        const detail = (xa: number, za: number, xb: number, zb: number, ya: number, yb: number, color: number) => {
+          boxes.push({ id: 0, x0: xa, x1: xb, z0: za, z1: zb, y0: ya, y1: yb, kind: BoxKind.Wall, color });
+        };
+        detail(x0, z0, x1, z0 + .22, y1, y1 + .45, 0xaaa69c);
+        detail(x0, z1 - .22, x1, z1, y1, y1 + .45, 0xaaa69c);
+        detail(x0, z0, x0 + .22, z1, y1, y1 + .45, 0xaaa69c);
+        detail(x1 - .22, z0, x1, z1, y1, y1 + .45, 0xaaa69c);
+        detail(cx - 1, (z0 + z1) / 2 - .6, cx + 1, (z0 + z1) / 2 + .6, y1, y1 + .8, 0x717b7f);
         // prédios sólidos: janelas pintadas (os prédios com interior vêm na etapa 4)
         c.setHex(0x2c3640);
         const gy = y0 + 4;
@@ -179,7 +218,7 @@ export class GameScene {
         tri(x1, y, z1, x0, y, z1, x0, ry, zm, 1.05); tri(x1, y, z1, x0, ry, zm, x1, ry, zm, 1.05);
         tri(x0, y, z1, x0, y, z0, x0, ry, zm, 0.8); tri(x1, y, z0, x1, y, z1, x1, ry, zm, 0.8);
       } else {
-        const xm = (x0 + x1) / 2, ry = y + h;
+        const xm = r.sawtooth ? x0 + (x1 - x0) * .9 : (x0 + x1) / 2, ry = y + h;
         tri(x0, y, z1, x0, y, z0, xm, ry, z0, 1.0); tri(x0, y, z1, xm, ry, z0, xm, ry, z1, 1.0);
         tri(x1, y, z0, x1, y, z1, xm, ry, z1, 0.88); tri(x1, y, z0, xm, ry, z1, xm, ry, z0, 0.88);
         tri(x0, y, z0, x1, y, z0, xm, ry, z0, 0.8); tri(x1, y, z1, x0, y, z1, xm, ry, z1, 0.8);

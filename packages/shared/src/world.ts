@@ -1,8 +1,8 @@
-import { WORLD_SIZE, STEP_HEIGHT } from './config';
+import { WORLD_SIZE, STEP_HEIGHT, BUSH_RADIUS_MIN, BUSH_RADIUS_MAX, BUSH_HEIGHT_MIN, BUSH_HEIGHT_MAX } from './config';
 import { hash2, mulberry32 } from './rng';
 
 export const BoxKind = {
-  Building: 0, Crate: 1, Wall: 2, Tree: 3, Sandbag: 4, Base: 5, House: 6, Roof: 7, Fence: 8, Container: 9, Rock: 10, Fob: 11,
+  Building: 0, Crate: 1, Wall: 2, Tree: 3, Sandbag: 4, Base: 5, House: 6, Roof: 7, Fence: 8, Container: 9, Rock: 10, Fob: 11, Industrial: 12,
 } as const;
 export type BoxKind = number;
 
@@ -20,7 +20,7 @@ export interface Box {
 export interface Tree { x: number; y: number; z: number; h: number; s: number }
 export interface Point2 { x: number; z: number }
 export interface Bush { x: number; y: number; z: number; r: number; h: number }
-export interface RoofDecor { x0: number; z0: number; x1: number; z1: number; y: number; h: number; color: number }
+export interface RoofDecor { x0: number; z0: number; x1: number; z1: number; y: number; h: number; color: number; sawtooth?: boolean }
 export interface RockDecor { x: number; y: number; z: number; s: number; rot: number }
 export interface Poi { x: number; z: number; name: string; r: number }
 
@@ -74,7 +74,11 @@ export class World {
   readonly roofs: RoofDecor[] = [];
   readonly rocks: RockDecor[] = [];
   readonly houses: Point2[] = [];
+  readonly details: Box[] = [];
+  readonly industrialProps: { x: number; y: number; z: number; r: number; h: number; kind: 'tank' | 'silo' | 'chimney' }[] = [];
+  readonly facilities: Point2[] = [];
   readonly roads: { ax: number; az: number; bx: number; bz: number }[] = [];
+  readonly streets: { x0: number; z0: number; x1: number; z1: number }[] = [];
   private bushGrid = new Map<number, Bush[]>();
   private grid = new Map<number, Box[]>();
   private nextBoxId = 1;
@@ -277,10 +281,45 @@ export class World {
         }
       }
       this.wallRun(alongX, f0, f0 + th, a0, a1, base, fy, top, ops, kind, o.color);
+      const trim = (a: number, b: number, y0: number, y1: number, color = 0xe2d8c2) => {
+        this.details.push(alongX
+          ? { id: 0, x0: a, x1: b, z0: f0 - .07, z1: f0 + th + .07, y0, y1, kind: BoxKind.Wall, color }
+          : { id: 0, x0: f0 - .07, x1: f0 + th + .07, z0: a, z1: b, y0, y1, kind: BoxKind.Wall, color });
+      };
+      trim(a0, a1, fy - .18, fy, 0x777368);
+      trim(a0, a1, top - .16, top, 0xd6cfbd);
+      for (const op of ops) {
+        const a = op.c - op.w / 2, b = op.c + op.w / 2;
+        trim(a - .1, a, fy + op.y0, fy + op.y1 + .1);
+        trim(b, b + .1, fy + op.y0, fy + op.y1 + .1);
+        trim(a, b, fy + op.y1, fy + op.y1 + .1);
+        if (op.y0 > 0) trim(a - .1, b + .1, fy + op.y0 - .1, fy + op.y0);
+      }
     }
     this.addBox({ id: 0, x0: x0 - 0.25, x1: x1 + 0.25, z0: z0 - 0.25, z1: z1 + 0.25, y0: top, y1: top + 0.25, kind: BoxKind.Roof, color: o.roofColor });
     if (o.pitched) this.roofs.push({ x0: x0 - 0.4, z0: z0 - 0.4, x1: x1 + 0.4, z1: z1 + 0.4, y: top + 0.25, h: Math.min(w, d) * 0.3, color: o.roofColor });
+    if (o.pitched && o.wallH < 4) {
+      this.details.push({ id: 0, x0: x0 + 1, x1: x0 + 1.7, z0: cz - .4, z1: cz + .4, y0: top, y1: top + Math.min(w, d) * .3 + .7, kind: BoxKind.Wall, color: 0x895d48 });
+      // Móveis encostados nos cantos deixam o centro e as portas livres.
+      const furniture = (xa: number, za: number, xb: number, zb: number, h: number, color: number) =>
+        this.addBox({ id: 0, x0: xa, x1: xb, z0: za, z1: zb, y0: fy, y1: fy + h, kind: BoxKind.Crate, color });
+      furniture(x0 + .5, z0 + .5, x0 + 2.5, z0 + 1.5, .55, 0x7e8270);
+      furniture(x1 - 1.8, z1 - 1.3, x1 - .5, z1 - .5, .8, 0x73553b);
+      furniture(x0 + .5, z1 - 1.3, x0 + 1.6, z1 - .5, 1.8, 0x68513d);
+      if (w >= 12 && d >= 10) {
+        furniture(cx - .12, z0 + th, cx + .12, cz - 1.1, o.wallH, o.color);
+        furniture(cx - .12, cz + 1.1, cx + .12, z1 - th, o.wallH, o.color);
+      }
+    }
     this.houses.push({ x: cx, z: cz });
+    for (const door of o.doors) {
+      const side = door.side;
+      const sx = side === 1 ? x1 + .3 : side === 3 ? x0 - .3 : cx;
+      const sz = side === 0 ? z0 - .3 : side === 2 ? z1 + .3 : cz;
+      const sw = side % 2 === 0 ? door.w + .2 : .6, sd = side % 2 === 0 ? .6 : door.w + .2;
+      const ground = this.heightAt(sx, sz);
+      this.addBox({ id: 0, x0: sx - sw / 2, x1: sx + sw / 2, z0: sz - sd / 2, z1: sz + sd / 2, y0: ground - .4, y1: Math.max(ground + .03, fy - .12), kind: BoxKind.Wall, color: 0x99958a });
+    }
     return true;
   }
 
@@ -349,6 +388,8 @@ export class World {
     // ruas
     for (let k = -3; k <= 2; k++) {
       const c = (k + 0.5) * P;
+      this.streets.push({ x0: T.x + c - S / 2, z0: T.z - 2.5 * P - S / 2, x1: T.x + c + S / 2, z1: T.z + 2.5 * P + S / 2 });
+      this.streets.push({ x0: T.x - 2.5 * P - S / 2, z0: T.z + c - S / 2, x1: T.x + 2.5 * P + S / 2, z1: T.z + c + S / 2 });
       this.paintRect(T.x + c - S / 2, T.z - 2.5 * P - S / 2, T.x + c + S / 2, T.z + 2.5 * P + S / 2, Surface.Road);
       this.paintRect(T.x - 2.5 * P - S / 2, T.z + c - S / 2, T.x + 2.5 * P + S / 2, T.z + c + S / 2, Surface.Road);
     }
@@ -389,6 +430,7 @@ export class World {
         const lw = 6 + rnd() * 6;
         this.solid(bx - lw / 2, bz - 0.3, bx + lw / 2, bz + 0.3, 1.6 + rnd() * 1.2, BoxKind.Wall, 0x8f8a80, 1);
         this.solid(bx - lw / 2 - 0.3, bz, bx - lw / 2 + 0.3, bz + 4 + rnd() * 4, 1.4 + rnd(), BoxKind.Wall, 0x8f8a80, 1);
+        this.ruinRemains(bx, bz, lw, 6);
         for (let k = 0; k < 4; k++) this.block(bx + (rnd() - 0.5) * 24, bz + (rnd() - 0.5) * 24, 1.3, 1.3, 1.1, BoxKind.Crate, 0x7a5c38, 1);
       }
     }
@@ -411,6 +453,7 @@ export class World {
     this.house(I.x - 42, I.z - 30, 28, 16, whOpts(1, 3));
     this.house(I.x + 38, I.z - 36, 16, 28, whOpts(0, 2));
     this.house(I.x + 4, I.z + 42, 30, 16, whOpts(1, 3));
+    this.industrialProp(I.x + 65, I.z + 58, 3.5, 12, 'silo');
     // escritório de dois andares (sólido)
     this.block(I.x - 50, I.z + 38, 14, 10, 6.5, BoxKind.Building, 0xa9a39a, 4);
     // pilhas de contêineres
@@ -429,7 +472,7 @@ export class World {
     // tanques de combustível
     for (let k = 0; k < 3; k++) {
       const cx = I.x + 62, cz = I.z - 8 + k * 9;
-      if (this.areaFree(cx - 2.5, cz - 2.5, cx + 2.5, cz + 2.5, 1)) this.block(cx, cz, 5, 5, 6, BoxKind.Building, 0xc9c6bd, 1);
+      this.industrialProp(cx, cz, 2.5, 6, 'tank');
     }
     // caixotes e pallets
     for (let k = 0; k < 40; k++) {
@@ -493,6 +536,21 @@ export class World {
       k++;
     }
     // cerca alta com portões (não dá para pular)
+    this.industrialProp(I.x - 70, I.z - 66, 2, 26, 'chimney');
+    this.industrialProp(I.x - 62, I.z - 66, 2, 20, 'chimney');
+    this.house(I.x + 12, I.z + 86, 6, 5, { wallH: 2.8, color: 0xb7b6a8, roofColor: 0x596268, doors: [{ side: 3, w: 1.4, h: 2.2 }], win: { w: 1.5, y0: 1, y1: 2.2, gap: 3 } });
+    // Pórtico acima da passagem e doca com degraus que o controlador consegue subir.
+    const pipeY = this.heightAt(I.x + 42, I.z + 20) + 5;
+    this.addBox({ id: 0, x0: I.x + 25, x1: I.x + 66, z0: I.z + 20, z1: I.z + 20.5, y0: pipeY, y1: pipeY + .5, kind: BoxKind.Wall, color: 0x89938d });
+    for (const dx of [25, 66]) if (this.areaFree(I.x + dx - .2, I.z + 19.8, I.x + dx + .2, I.z + 20.7, .3))
+      this.block(I.x + dx, I.z + 20.25, .4, .9, 5, BoxKind.Wall, 0x70787a, 1);
+    for (let k = 0; k < 5; k++) {
+      const x = I.x - 7 + k * .65, z = I.z + 54;
+      if (this.areaFree(x - .32, z - 2, x + .32, z + 2, .05)) this.block(x, z, .64, 4, (k + 1) * .22, BoxKind.Wall, 0x8f9189, 1);
+    }
+    for (const roof of this.boxes.filter(b => b.kind === BoxKind.Roof && Math.hypot((b.x0 + b.x1) / 2 - I.x, (b.z0 + b.z1) / 2 - I.z) < 75)) {
+      for (let x = roof.x0; x < roof.x1; x += 4) this.roofs.push({ x0: x, x1: Math.min(x + 4, roof.x1), z0: roof.z0, z1: roof.z1, y: roof.y1, h: 1.4, color: 0x707b80, sawtooth: true });
+    }
     const H = 96;
     for (const s of [-1, 1]) for (const half of [-1, 1]) {
       const a = half < 0 ? -H : 6, c = half < 0 ? -6 : H;
@@ -593,6 +651,24 @@ export class World {
     const rnd = this.rnd;
     const awayFromPois = (x: number, z: number, extra: number) =>
       this.pois.every((p) => Math.hypot(p.x - x, p.z - z) > p.r + extra) && this.bases.every((b) => Math.hypot(b.x - x, b.z - z) > 85 + extra);
+    // Instalações menores nos trechos planos, sem alterar o relevo nem o PRNG.
+    for (const road of this.roads) {
+      if (this.facilities.length >= 3) break;
+      const dx = road.bx - road.ax, dz = road.bz - road.az, length = Math.hypot(dx, dz);
+      for (const side of [-1, 1]) {
+        if (this.facilities.length >= 3) break;
+        const x = (road.ax + road.bx) / 2 - dz / length * 32 * side;
+        const z = (road.az + road.bz) / 2 + dx / length * 32 * side;
+        if (!awayFromPois(x, z, 30) || this.facilities.some(p => Math.hypot(p.x - x, p.z - z) < 180)) continue;
+        if (this.roadDist(x, z) < 22 || !this.areaFree(x - 20, z - 16, x + 20, z + 16, 2)) continue;
+        if (!this.house(x, z, 14, 10, { wallH: 4.5, color: 0x92968c, roofColor: 0x667278, pitched: true, doors: [{ side: 0, w: 4, h: 3.5 }, { side: 2, w: 4, h: 3.5 }] })) continue;
+        this.facilities.push({ x, z });
+        this.paintRect(x - 20, z - 16, x + 20, z + 16, Surface.Concrete);
+        this.industrialProp(x + 13, z, 2.5, 10, 'silo');
+        this.block(x - 13, z - 5, 6, 2.5, 2.6, BoxKind.Container, 0x496b73, 1);
+        this.block(x - 13, z + 4, 6, 2.5, 2.6, BoxKind.Container, 0x91613f, 1);
+      }
+    }
     // casas à beira da estrada, porta virada para a estrada
     let placed = 0;
     for (let tries = 0; tries < 900 && placed < 46; tries++) {
@@ -624,11 +700,28 @@ export class World {
       if (!this.areaFree(x - lw / 2, z - ld / 2, x + lw / 2, z + ld / 2, 2)) continue;
       this.solid(x - lw / 2, z - 0.3, x + lw / 2, z + 0.3, 1.4 + rnd() * 1.6, BoxKind.Wall, 0x8f8a80, 1);
       this.solid(x - lw / 2, z, x - lw / 2 + 0.6, z + ld, 1.2 + rnd() * 1.4, BoxKind.Wall, 0x8f8a80, 1);
+      this.ruinRemains(x, z, lw, ld);
       k++;
     }
   }
 
   private forests: { x: number; z: number; r: number }[] = [];
+
+  private ruinRemains(x: number, z: number, w: number, d: number) {
+    this.block(x + w / 2, z + d * .25, .5, d * .5, .85, BoxKind.Wall, 0x817b70, 1);
+    this.block(x + w * .2, z + d, w * .6, .5, .6, BoxKind.Wall, 0x817b70, 1);
+    for (let k = 0; k < 6; k++) {
+      const px = x - w * .35 + k * w * .13, pz = z + d * (.3 + (k % 3) * .18);
+      this.block(px, pz, .65 + (k % 2) * .35, .6, .25 + (k % 3) * .15, BoxKind.Crate, 0x999183, .4);
+    }
+  }
+
+  private industrialProp(x: number, z: number, r: number, h: number, kind: 'tank' | 'silo' | 'chimney') {
+    if (!this.areaFree(x - r, z - r, x + r, z + r, .8)) return;
+    const y = this.heightAt(x, z);
+    this.addBox({ id: 0, x0: x - r, x1: x + r, z0: z - r, z1: z + r, y0: y - 1, y1: y + h, kind: BoxKind.Industrial, color: 0xb3b9b7 });
+    this.industrialProps.push({ x, y, z, r, h, kind });
+  }
 
   private buildForests() {
     const rnd = this.rnd;
@@ -690,18 +783,20 @@ export class World {
 
   private buildBushes() {
     const rnd = this.rnd;
-    const tryBush = (x: number, z: number, big = 1) => {
+    const tryBush = (x: number, z: number) => {
       if (x < 6 || z < 6 || x > WORLD_SIZE - 6 || z > WORLD_SIZE - 6) return;
       if (this.roadDist(x, z) < 4.2) return;
+      if (this.streets.some(s => x > s.x0 - 3 && x < s.x1 + 3 && z > s.z0 - 3 && z < s.z1 + 3)) return;
+      if (this.facilities.some(p => Math.abs(x - p.x) < 22 && Math.abs(z - p.z) < 18)) return;
       if (this.bases.some((b) => Math.hypot(b.x - x, b.z - z) < 50)) return;
       // área industrial: só algumas moitas (a cobertura vem de contêineres, barreiras e muretas)
       const ind = this.pois[1];
       if (Math.hypot(x - ind.x, z - ind.z) < ind.r + 15 && rnd() > 0.06) return;
-      // grandes o bastante para um soldado entrar e se esconder
-      const r = (1.4 + rnd() * 1.1) * big;
+      // Porte de arbusto também na borda da floresta, sem ampliar o raio.
+      const r = BUSH_RADIUS_MIN + rnd() * (BUSH_RADIUS_MAX - BUSH_RADIUS_MIN);
       if (!this.areaFree(x - r * 0.7, z - r * 0.7, x + r * 0.7, z + r * 0.7, 0.2)) return;
       const y = this.heightAt(x, z);
-      this.addBush({ x, y, z, r, h: 0.45 + rnd() * 0.35 });
+      this.addBush({ x, y, z, r, h: BUSH_HEIGHT_MIN + rnd() * (BUSH_HEIGHT_MAX - BUSH_HEIGHT_MIN) });
     };
     // cercas vivas ao longo das estradas
     for (const r of this.roads) {
@@ -720,7 +815,7 @@ export class World {
       const n = Math.round(f.r * 1.4);
       for (let k = 0; k < n; k++) {
         const a = rnd() * Math.PI * 2, d = f.r + (rnd() - 0.3) * 14;
-        tryBush(f.x + Math.cos(a) * d, f.z + Math.sin(a) * d, 1.15);
+        tryBush(f.x + Math.cos(a) * d, f.z + Math.sin(a) * d);
       }
       for (let k = 0; k < f.r * 0.5; k++) {
         const a = rnd() * Math.PI * 2, d = Math.sqrt(rnd()) * f.r;

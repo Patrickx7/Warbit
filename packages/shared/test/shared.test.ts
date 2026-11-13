@@ -13,11 +13,34 @@ describe('mundo', () => {
     expect(b.boxes.length).toBe(world.boxes.length);
     expect(b.heightAt(333.3, 777.7)).toBe(world.heightAt(333.3, 777.7));
     expect(b.czCandidates).toEqual(world.czCandidates);
+    expect(b.bushes).toEqual(world.bushes);
+    expect(b.streets).toEqual(world.streets);
+    expect(b.details).toEqual(world.details);
+    expect(b.industrialProps).toEqual(world.industrialProps);
+    expect(b.boxes).toEqual(world.boxes);
     expect(new World(99).heightAt(333.3, 777.7)).not.toBe(world.heightAt(333.3, 777.7));
   });
   it('tem 3 bases e construções', () => {
     expect(world.bases.length).toBe(3);
     expect(world.boxes.length).toBeGreaterThan(200);
+  });
+  it('mantém ruas e calçadas livres de moitas', () => {
+    expect(world.streets).toHaveLength(12);
+    for (const s of world.streets) {
+      expect(world.bushes.some(b => b.x + b.r > s.x0 - 1.2 && b.x - b.r < s.x1 + 1.2 && b.z + b.r > s.z0 - 1.2 && b.z - b.r < s.z1 + 1.2)).toBe(false);
+    }
+  });
+  it('instalações industriais têm colisão e pátios sem moitas nos seeds de teste e produção', () => {
+    for (const w of [world, new World(20261112)]) {
+      expect(w.facilities.length).toBeGreaterThanOrEqual(2);
+      expect(w.industrialProps.some(p => p.kind === 'chimney')).toBe(true);
+      expect(w.industrialProps.some(p => p.kind === 'tank')).toBe(true);
+      for (const p of w.industrialProps) {
+        expect(w.boxes.some(b => b.kind === 12 && b.x0 === p.x - p.r && b.x1 === p.x + p.r && b.y1 === p.y + p.h)).toBe(true);
+        expect(w.raycast(p.x, p.y + p.h + 2, p.z, 0, -1, 0, 10)).toBeCloseTo(2, 3);
+      }
+      for (const p of w.facilities) expect(w.bushes.some(b => Math.abs(b.x - p.x) < 22 && Math.abs(b.z - p.z) < 18)).toBe(false);
+    }
   });
   it('raycast para em caixas e no terreno', () => {
     const b = world.boxes.find((x) => x.kind === 0)!;
@@ -175,7 +198,7 @@ describe('moitas', () => {
   it('têm tamanho para esconder um soldado e dá para entrar nelas', () => {
     expect(world.bushes.length).toBeGreaterThan(300);
     const b = world.bushes[0];
-    expect(b.r).toBeGreaterThanOrEqual(1.3);
+    expect(world.bushes.every(b => b.r >= 1.0 && b.r <= 1.6 && b.h >= 1.2 && b.h <= 1.8)).toBe(true);
     expect(world.inBush(b.x, b.z)).toBe(b);
     expect(world.inBush(b.x + b.r * 2, b.z)).not.toBe(b);
     // sem colisão: o jogador atravessa a moita
@@ -191,8 +214,8 @@ describe('moitas', () => {
       && world.heightAt(q.x - 30, q.z) < q.y + 2 && world.heightAt(q.x + 30, q.z) < q.y + 2 && world.heightAt(q.x + 30, q.z) > q.y - 2)!;
     expect(b).toBeTruthy();
     const y = b.y + b.h * 0.5;
-    expect(world.bushes.every(b => b.h <= 0.8)).toBe(true);
-    expect(world.bushBlocks(b.x - 30, b.y + 1.2, b.z, b.x + 30, b.y + 1.2, b.z)).toBe(false);
+    expect(world.bushBlocks(b.x - 30, b.y + b.h + 0.1, b.z, b.x + 30, b.y + b.h + 0.1, b.z)).toBe(false);
+    expect(world.bushBlocks(b.x - 30, b.y + 1.05, b.z, b.x + 30, b.y + 1.05, b.z)).toBe(true); // altura dos olhos agachado
     expect(world.bushBlocks(b.x - 30, y, b.z, b.x + 30, y, b.z)).toBe(true); // no meio do caminho
     expect(world.bushBlocks(b.x, y, b.z, b.x + 30, y, b.z)).toBe(false); // observador dentro dela
     expect(world.bushBlocks(b.x - 30, y, b.z, b.x, y, b.z)).toBe(false); // alvo dentro dela

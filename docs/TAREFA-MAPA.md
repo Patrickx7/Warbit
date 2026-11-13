@@ -1,5 +1,15 @@
 # Tarefa 1 — Mapa com mais detalhe (prioridade máxima)
 
+## Implementação local — 13/11/2026
+
+- Moitas com raio de 1–1,6 m e altura de 1,2–1,8 m; vias e calçadas da vila livres de moitas.
+- Estradas em malha acompanhando o relevo; ruas da vila com calçadas, faixas e postes instanciados.
+- Casas com molduras, base, beiral, chaminé, degrau e móveis; divisão interna nas maiores. Prédios sólidos com porta visual, platibanda e equipamento no telhado. Ruínas com mais paredes e entulho.
+- Tanques, silos e chaminés cilíndricos com colisão em caixas; telhados industriais em dentes, pórtico, guarita, doca escalonada e três instalações menores nos seeds 1234 e 20261112.
+- Textura procedural repetida a cada 6 m e suavização das cores do terreno.
+- Validação: `npm run typecheck`, 55 testes, três execuções de `botsim`, build e entrada em partida local. Inspeção visual da vila, indústria, fazenda, moitas e minimapa. Indústria: 55 chamadas e aproximadamente 1,16 M de triângulos, acima de 60 FPS no navegador usado; não é uma medição em GPU intermediária identificada. O contador estava oculto pelo CSS e agora aparece apenas no benchmark.
+- Publicação no Render pendente de pedido do dono. Interiores de prédios com escadas continuam na tarefa 3 do roadmap.
+
 ## Reclamações do dono (palavras dele)
 - "O mapa está muito feio e sem detalhes"
 - "falta ruas"

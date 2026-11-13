@@ -812,6 +812,7 @@ function runBench() {
   $('hud').classList.remove('hidden');
   for (const id of ['top', 'feed', 'bl', 'br', 'wallet', 'minimap', 'mmZoom']) $(id).style.display = 'none';
   const perf = $('perf');
+  perf.style.setProperty('display', 'block', 'important');
   perf.style.fontSize = '15px'; perf.style.color = '#fff';
   const camR = Number(new URLSearchParams(location.search).get('r')) || 34;
   const bq = new URLSearchParams(location.search);
