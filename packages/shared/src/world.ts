@@ -701,7 +701,7 @@ export class World {
       const r = (1.4 + rnd() * 1.1) * big;
       if (!this.areaFree(x - r * 0.7, z - r * 0.7, x + r * 0.7, z + r * 0.7, 0.2)) return;
       const y = this.heightAt(x, z);
-      this.addBush({ x, y, z, r, h: 1.5 + rnd() * 0.8 });
+      this.addBush({ x, y, z, r, h: 0.45 + rnd() * 0.35 });
     };
     // cercas vivas ao longo das estradas
     for (const r of this.roads) {

@@ -71,8 +71,8 @@ wss.on('connection', (ws: WebSocket) => {
       if (!m || typeof m.t !== 'string') return;
       if (m.t === 'hello') {
         if (player) return;
-        player = match.join(conn, String(m.name ?? ''), typeof m.token === 'string' ? m.token : undefined);
-        if (!player) { ws.send(JSON.stringify({ t: 'msg', text: 'Servidor cheio' })); ws.close(); }
+        player = match.join(conn, String(m.name ?? ''), typeof m.token === 'string' ? m.token : undefined, m.team);
+        if (!player) { ws.send(JSON.stringify({ t: 'msg', text: 'Time escolhido ou servidor cheio. Escolha outro time.' })); ws.close(1008); }
         return;
       }
       if (player) match.onJson(player, m);

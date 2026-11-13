@@ -79,8 +79,8 @@ describe('posturas e fôlego', () => {
   it('correr gasta fôlego, cansa e recupera', () => {
     const s = start();
     let everTired = false;
-    for (let i = 0; i < 30 * 13; i++) { stepMove(s, BTN_FWD | BTN_SPRINT, 0.3, world, DT); everTired ||= s.tired; }
-    expect(everTired).toBe(true); // ~11 s de corrida e o fôlego acaba
+    for (let i = 0; i < 30 * 27; i++) { stepMove(s, BTN_FWD | BTN_SPRINT, 0.3, world, DT); everTired ||= s.tired; }
+    expect(everTired).toBe(true); // ~25 s de corrida e o fôlego acaba
     for (let i = 0; i < 30 * 12; i++) stepMove(s, 0, 0, world, DT);
     expect(s.tired).toBe(false);
     expect(s.stamina).toBeGreaterThan(0.9);
@@ -99,7 +99,7 @@ describe('protocolo', () => {
     const buf = encodeSnapshot({
       tick: 900, ack: 42, alive,
       own: { x: 10.5, y: 3.25, z: 700, vx: 1, vy: -2, vz: 3, hp: 87, life: LIFE_ALIVE, ammo: 30, reserve: 120, flags: 3, slot: 1, stamina: 0.5, stanceCd: 0.25 },
-      ents: [{ id: 5, x: 812.4, y: 17.3, z: 44.9, yaw: 2.1, pitch: -0.4, life: 1, crouch: true, prone: true, sprint: false, marked: true, team: 2, armor: 3, helmet: 4, pack: 2, weapon: 7, shot: 250, hp: 66 }],
+      ents: [{ id: 5, x: 812.4, y: 17.3, z: 44.9, yaw: 2.1, pitch: -0.4, life: 1, crouch: true, prone: true, sprint: false, marked: true, team: 2, armor: 3, helmet: 4, pack: 2, weapon: 7, shot: 250, hp: 66, suppressed: true }],
     });
     const s = decodeSnapshot(new DataView(buf));
     expect(s.tick).toBe(900); expect(s.ack).toBe(42); expect(s.own.hp).toBe(87); expect(s.own.reserve).toBe(120); expect(s.own.slot).toBe(1);
@@ -108,7 +108,7 @@ describe('protocolo', () => {
     expect(e.id).toBe(5); expect(e.x).toBeCloseTo(812.4, 1); expect(e.y).toBeCloseTo(17.3, 1); expect(e.z).toBeCloseTo(44.9, 1);
     expect(e.yaw).toBeCloseTo(2.1, 1); expect(e.pitch).toBeCloseTo(-0.4, 1);
     expect(s.own.stamina).toBeCloseTo(0.5, 2); expect(s.own.stanceCd).toBeCloseTo(0.25, 2);
-    expect(e.crouch).toBe(true); expect(e.prone).toBe(true); expect(e.marked).toBe(true); expect(e.team).toBe(2); expect(e.armor).toBe(3); expect(e.helmet).toBe(4); expect(e.pack).toBe(2);
+    expect(e.suppressed).toBe(true); expect(e.hp).toBe(66); expect(e.crouch).toBe(true); expect(e.prone).toBe(true); expect(e.marked).toBe(true); expect(e.team).toBe(2); expect(e.armor).toBe(3); expect(e.helmet).toBe(4); expect(e.pack).toBe(2);
     expect(e.weapon).toBe(7); expect(e.shot).toBe(250); expect(e.hp).toBe(66);
   });
 });
@@ -190,7 +190,9 @@ describe('moitas', () => {
     const b = world.bushes.find((q) => world.bushes.every((o) => o === q || Math.hypot(o.x - q.x, o.z - q.z) > 45)
       && world.heightAt(q.x - 30, q.z) < q.y + 2 && world.heightAt(q.x + 30, q.z) < q.y + 2 && world.heightAt(q.x + 30, q.z) > q.y - 2)!;
     expect(b).toBeTruthy();
-    const y = b.y + 1.2;
+    const y = b.y + b.h * 0.5;
+    expect(world.bushes.every(b => b.h <= 0.8)).toBe(true);
+    expect(world.bushBlocks(b.x - 30, b.y + 1.2, b.z, b.x + 30, b.y + 1.2, b.z)).toBe(false);
     expect(world.bushBlocks(b.x - 30, y, b.z, b.x + 30, y, b.z)).toBe(true); // no meio do caminho
     expect(world.bushBlocks(b.x, y, b.z, b.x + 30, y, b.z)).toBe(false); // observador dentro dela
     expect(world.bushBlocks(b.x - 30, y, b.z, b.x, y, b.z)).toBe(false); // alvo dentro dela

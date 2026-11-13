@@ -1,9 +1,12 @@
+import { Footsteps } from './footsteps';
+import { getEquipmentVendorPos, Surface, type Magazine } from '@warbit/shared';
 import * as THREE from 'three';
 import {
   BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD, BTN2_SECONDARY, BTN2_USE, BTN3_FOB, BTN3_PRONE, BTN_BACK, BTN_CROUCH,
   BTN_FIRE, BTN_FWD, BTN_JUMP, BTN_LEFT, BTN_RIGHT, BTN_SPRINT, BoxKind, DT, ITEMS, ITEM_BY_ID, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, MSG_SNAPSHOT,
   REVIVE_RANGE, SPRINT_FLAG_SPEED, TEAM_NAMES, TICK_RATE, World, aimDir, buildLoadout, decodeSnapshot, encodeInput, eyeHeight, maskHas,
   newMoveState, stepMove, whereIs,
+  getVendorPos, stepVehicle, VEHICLE_BY_ID, type VehicleState,
   type ClientMsg, type EntityState, type Loadout, type MoveState, type OwnState, type RosterEntry, type ServerMsg, type Snapshot, type Zone,
 } from '@warbit/shared';
 import { Sfx } from './audio';
@@ -13,6 +16,7 @@ import { GUN_KIND, Soldiers, TEAM_LOOK, type SoldierPose } from './render/soldie
 import { SoldierPreview } from './render/preview';
 import { WEAPON_ITEMS, gunModel } from './render/guns';
 import { ViewModel } from './render/viewmodel';
+import { VehicleRenderer } from './render/vehicles';
 import { UI, esc, type MapDot, type MapFob } from './ui';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -20,7 +24,7 @@ const canvas = $<HTMLCanvasElement>('game');
 const UNIFORM = TEAM_LOOK.map((l) => l.jacket);
 const BASE_FOV = 75;
 const DEG = Math.PI / 180;
-const KEYS_TO_LOCK = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyC', 'KeyZ', 'KeyQ', 'KeyE', 'KeyR', 'KeyF', 'KeyB', 'KeyG', 'KeyH', 'KeyN', 'ControlLeft'];
+const KEYS_TO_LOCK = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyC', 'KeyZ', 'KeyQ', 'KeyE', 'KeyR', 'KeyF', 'KeyB', 'KeyG', 'KeyH', 'KeyN', 'ControlLeft', 'ControlRight'];
 
 interface Sample { t: number; x: number; y: number; z: number; yaw: number; pitch: number }
 interface Ent { samples: Sample[]; s: EntityState; shot: number; x: number; y: number; z: number; yaw: number; pitch: number }
@@ -38,6 +42,8 @@ function lerpAngle(a: number, b: number, t: number) {
 class Game {
   ui = new UI();
   sfx = new Sfx();
+  footsteps = new Footsteps();
+  inventoryPreview = new SoldierPreview($<HTMLCanvasElement>('inventoryPreview'));
   preview = new SoldierPreview($<HTMLCanvasElement>('preview'));
   ws: WebSocket | null = null;
   world!: World;
@@ -45,6 +51,9 @@ class Game {
   soldiers!: Soldiers;
   fx!: Fx;
   vm!: ViewModel;
+  vehicleRenderer!: VehicleRenderer;
+  vehicles: VehicleState[] = [];
+  myVehicleId = -1;
   ready = false;
   name = 'Mercenário';
   reconnects = 0;
@@ -69,6 +78,7 @@ class Game {
   slot = 0;
   prevButtons = 0;
   simTime = 0; nextFire = 0; localAmmo = 0; lastShotAt = -1;
+  cargo: (Magazine|null)[] = [];
   loadout: Loadout | null = null;
   speedMul = 1;
   tools = { frag: 0, medbag: 0, build: 0, fob: 0 };
@@ -100,27 +110,28 @@ class Game {
     ws.onopen = () => {
       let token: string | undefined;
       try { token = localStorage.getItem('warbit.token') ?? undefined; } catch { /* sem armazenamento */ }
-      this.send({ t: 'hello', name, token });
+      const preferred=Number($<HTMLSelectElement>('team').value);
+      this.send({ t: 'hello', name, token, team:preferred>=0?preferred:undefined });
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data === 'string') { this.bytesIn += ev.data.length; this.onJson(JSON.parse(ev.data) as ServerMsg); }
       else { this.bytesIn += (ev.data as ArrayBuffer).byteLength; this.onBinary(ev.data as ArrayBuffer); }
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (this.ws !== ws) return;
       this.ws = null;
       document.exitPointerLock();
       this.ents.clear();
       this.life = LIFE_NONE;
       // caiu o servidor/rede: tenta voltar sozinho (até 6 vezes)
-      if (this.ready && !this.closing && this.reconnects < 6) {
+      if (event.code!==1008 && this.ready && !this.closing && this.reconnects < 6) {
         this.reconnects++;
         this.ui.center(`Conexão perdida — reconectando (${this.reconnects}/6)…`, 2500);
         setTimeout(() => { if (!this.ws) this.connect(this.name); }, 1500 * this.reconnects);
         return;
       }
       this.ui.show('menu', true); this.ui.show('shop', false); this.ui.show('hud', false); this.ui.show('paused', false);
-      $('status').textContent = this.ready ? 'Conexão perdida. Entre de novo.' : 'Não foi possível conectar ao servidor (npm run dev).';
+      $('status').textContent = event.code===1008 ? 'Time escolhido ou servidor cheio. Escolha outro time.' : this.ready ? 'Conexão perdida. Entre de novo.' : 'Não foi possível conectar ao servidor (npm run dev).';
     };
     ws.onerror = () => {};
   }
@@ -136,6 +147,8 @@ class Game {
     this.gs.scene.add(this.soldiers.group);
     this.fx = new Fx(this.gs.scene, this.world);
     this.vm = new ViewModel(this.gs.camera, UNIFORM[this.myTeam]);
+    this.vehicleRenderer = new VehicleRenderer(this.gs.scene, this.world);
+    this.ui.onBuyVehicle = (vType) => this.send({ t: 'buyVehicle', vehicleType: vType });
     this.ui.setWorld(this.world);
     this.ready = true;
     this.last = performance.now();
@@ -173,8 +186,16 @@ class Game {
         this.applyBuild(m.builds);
         this.life = LIFE_NONE; this.loadout = null; this.haveOffset = false;
         this.ui.show('menu', false); this.ui.show('hud', true);
-        this.ui.openShop(`Você é do time ${TEAM_NAMES[this.myTeam]}. Escolha o que comprar — nada vem marcado.`);
+        this.ui.openShop(`Você é do time ${TEAM_NAMES[this.myTeam]}. Entre na base e procure o comerciante.`);
         break;
+      case 'inventory': {
+        const result=buildLoadout(m.items,99,Infinity);
+        if(result.ok){this.loadout=result.loadout;const armor=result.loadout.armor?.armor??0;this.speedMul=armor>=4?.92:armor===3?.96:1;}
+        this.cargo=m.cargo;this.ui.setCargo(m.cargo);
+        if(m.purchased){this.localAmmo=m.ammo[this.slot]??0;this.ui.closeShop();this.lockInput();}
+        if(!$('board').classList.contains('hidden'))this.ui.inventory(this.loadout);
+        this.refreshTools();break;
+      }
       case 'roster': this.setRoster(m.roster); break;
       case 'state':
         this.cz = m.cz; this.hz = m.hz; this.phase = m.phase; this.fobs = m.fobs;
@@ -191,6 +212,7 @@ class Game {
       case 'hit': this.ui.hitmarker(m.kill); this.sfx.hit(m.kill); break;
       case 'hurt': this.ui.hurt(); this.sfx.hurt(); break;
       case 'life': this.setLife(m.life, m.reason, m.downLeft, m.tools, m.wait); break;
+      case 'purchase': this.sfx.purchase(); break;
       case 'shopError': this.ui.shopError(m.error); break;
       case 'build': this.applyBuild(m.add, m.remove); break;
       case 'nade': this.fx.addNade({ ...m, owner: -1 }); break;
@@ -201,7 +223,27 @@ class Game {
         break;
       }
       case 'board': this.ui.board(m.rows, this.roster, this.myId); break;
-      case 'msg': this.ui.center(m.text); if (m.text.includes('Hot Zone')) this.sfx.alert(); break;
+      case 'vehicles': {
+        this.vehicles = m.list;
+        const myV = this.vehicles.find((v) => v.driverId === this.myId);
+        const nowDriving = !!myV;
+        const wasDriving = this.myVehicleId !== -1;
+        this.myVehicleId = myV ? myV.id : -1;
+        if (nowDriving && !wasDriving) {
+          this.sfx.startEngine();
+        } else if (!nowDriving && wasDriving) {
+          this.sfx.stopEngine();
+        }
+        break;
+      }
+      case 'vehicleBoom': {
+        this.fx.flash(m.x, m.y + 0.5, m.z);
+        const c = this.gs.camera.position;
+        this.sfx.boom(Math.hypot(m.x - c.x, m.z - c.z), this.panOf(m.x, m.z));
+        this.vehicleRenderer?.remove(m.id);
+        break;
+      }
+      case 'msg': if(!this.ready)$('status').textContent=m.text; this.ui.center(m.text); if (m.text.includes('Hot Zone')) this.sfx.alert(); break;
       case 'pong': this.ping = Math.round(performance.now() - m.c); break;
     }
   }
@@ -214,6 +256,14 @@ class Game {
   private setLife(life: number, reason?: string, downLeft?: number, tools?: Record<string, number>, wait?: number) {
     const was = this.life;
     this.life = life;
+    if (life !== LIFE_ALIVE) {
+      this.ui.show('board', false);this.ui.closeShop();
+      if (this.myVehicleId !== -1) {
+        this.myVehicleId = -1;
+        this.sfx.stopEngine();
+      }
+      this.ui.closeVehicleShop();
+    }
     if (tools) { this.tools.frag = tools.frag ?? 0; this.tools.medbag = tools.medbag ?? 0; this.tools.build = tools.build ?? 0; this.tools.fob = tools.fob ?? 0; this.refreshTools(); }
     if (life === LIFE_ALIVE) {
       this.ui.closeShop(); this.ui.downed(false);
@@ -229,7 +279,7 @@ class Game {
       this.prone = false;
       if (document.pointerLockElement === canvas) document.exitPointerLock();
       this.ui.show('paused', false);
-      this.ui.openShop(reason ? `${reason}. Equipamento perdido — escolha de novo.` : 'Escolha o que comprar.', wait ?? 0);
+      this.ui.openShop(reason ? `${reason}. Equipamento perdido — retorne à base.` : 'Retorne à base para se equipar.', wait ?? 0);
     }
   }
 
@@ -332,8 +382,8 @@ class Game {
       const len = this.world.raycast(e.x, oy, e.z, dir.x, dir.y, dir.z, 260);
       this.fx.tracer(e.x + dir.x * 0.6, oy, e.z + dir.z * 0.6, dir.x, dir.y, dir.z, len);
     }
-    if (dist < 220) this.fx.flash(e.x + dir.x * 0.9, oy + dir.y * 0.9, e.z + dir.z * 0.9);
-    this.sfx.shot(kind, dist, this.panOf(e.x, e.z));
+    if (dist < 220 && !e.suppressed) this.fx.flash(e.x + dir.x * 0.9, oy + dir.y * 0.9, e.z + dir.z * 0.9);
+    this.sfx.shot(kind, dist, this.panOf(e.x, e.z),e.suppressed);
   }
 
   // ---------- entrada ----------
@@ -345,7 +395,7 @@ class Game {
   }
 
   private buttons(): [number, number, number] {
-    if (!this.locked()) return [0, 0, 0];
+    if (!this.locked() || !$('shop').classList.contains('hidden') || !$('board').classList.contains('hidden')) return [0, 0, 0];
     const k = this.keys;
     let b = 0, b2 = 0, b3 = 0;
     if (k.has('KeyW')) b |= BTN_FWD;
@@ -353,7 +403,7 @@ class Game {
     if (k.has('KeyA')) b |= BTN_LEFT;
     if (k.has('KeyD')) b |= BTN_RIGHT;
     if (k.has('Space')) b |= BTN_JUMP;
-    if (k.has('KeyC')) b |= BTN_CROUCH;
+    if (k.has('ControlLeft') || k.has('ControlRight') || k.has('KeyC')) b |= BTN_CROUCH;
     if (k.has('ShiftLeft')) b |= BTN_SPRINT;
     if (this.mouseL) b |= BTN_FIRE;
     if (k.has('KeyR')) b2 |= BTN2_RELOAD;
@@ -389,7 +439,20 @@ class Game {
     if (this.life !== LIFE_ALIVE) return;
     const [b, b2, b3] = this.buttons();
     const aimYaw = this.yaw + this.recY, aimPitch = Math.max(-1.5, Math.min(1.5, this.pitch + this.recP));
-    stepMove(p, b, aimYaw, this.world, DT, this.speedMul, b3);
+    if (this.myVehicleId !== -1) {
+      const myV = this.vehicles.find((v) => v.id === this.myVehicleId);
+      if (myV) {
+        stepVehicle(myV, b, DT, this.world);
+        p.x = myV.x; p.y = myV.y; p.z = myV.z;
+        p.vx = -Math.sin(myV.yaw) * myV.speed;
+        p.vz = -Math.cos(myV.yaw) * myV.speed;
+        this.yaw = myV.yaw;
+        this.pitch = myV.pitch;
+        this.sfx.updateEngine(Math.abs(myV.speed) / 17.5);
+      }
+    } else {
+      stepMove(p, b, aimYaw, this.world, DT, this.speedMul, b3);
+    }
     this.simTime += DT;
     const seq = ++this.seq;
     this.pending.push({ seq, buttons: b, buttons3: b3, yaw: aimYaw });
@@ -401,7 +464,7 @@ class Game {
     const it = this.weapon();
     const w = it?.weapon;
     const sprinting = (b & BTN_SPRINT) !== 0 && !p.prone && !p.crouch && Math.hypot(p.vx, p.vz) > SPRINT_FLAG_SPEED;
-    if (w && b & BTN_FIRE && !sprinting && (w.auto || !(this.prevButtons & BTN_FIRE)) && this.simTime >= this.nextFire && this.localAmmo > 0 && !(this.own && this.own.flags & 1)) {
+    if (this.myVehicleId === -1 && w && b & BTN_FIRE && !sprinting && (w.auto || !(this.prevButtons & BTN_FIRE)) && this.simTime >= this.nextFire && this.localAmmo > 0 && !(this.own && this.own.flags & 1)) {
       this.localAmmo--;
       this.nextFire = this.simTime + 60 / w.rpm;
       this.lastShotAt = this.simTime;
@@ -422,8 +485,8 @@ class Game {
         const vx = hx - tmpV.x, vy = hy - tmpV.y, vz = hz - tmpV.z, vl = Math.hypot(vx, vy, vz) || 1;
         this.fx.tracer(tmpV.x, tmpV.y, tmpV.z, vx / vl, vy / vl, vz / vl, vl, len < 299);
       }
-      this.fx.flash(tmpV.x, tmpV.y, tmpV.z);
-      this.sfx.shot(GUN_KIND[w.cls] ?? 0, 0, 0);
+      if(!(this.slot===0?this.loadout?.suppressor:this.loadout?.secondarySuppressor)) this.fx.flash(tmpV.x, tmpV.y, tmpV.z);
+      this.sfx.shot(GUN_KIND[w.cls] ?? 0, 0, 0,!!(this.slot===0?this.loadout?.suppressor:this.loadout?.secondarySuppressor));
       // recuo: sobe pouco, estabiliza e VOLTA sozinho quando para de atirar
       const stanceK = p.prone ? 0.55 : p.crouch ? 0.8 : 1;
       const kick = w.recoil * DEG * (ads ? 0.32 : 0.5) * stanceK / (1 + 0.22 * this.burst);
@@ -520,6 +583,15 @@ class Game {
       e.x = a.x + (b.x - a.x) * t; e.y = a.y + (b.y - a.y) * t; e.z = a.z + (b.z - a.z) * t;
       e.yaw = lerpAngle(a.yaw, b.yaw, t); e.pitch = a.pitch + (b.pitch - a.pitch) * t;
       const st = e.s;
+      const near=Math.hypot(e.x-cam.position.x,e.y-cam.position.y,e.z-cam.position.z);
+      const ground=this.world.groundAt(e.x,e.z,e.y+.1,0.3);
+      const riding=this.vehicles.some(v=>v.driverId===id);
+      if(near<32 && this.footsteps.advance(id,e.x,e.y,e.z,now,st.life===LIFE_ALIVE&&!riding&&Math.abs(e.y-ground)<.18,st.crouch,st.prone,st.sprint)) {
+        const soft=this.world.surfaceAt(e.x,e.z)!==Surface.Concrete;
+        const soundDist=Math.hypot(e.x-cam.position.x,e.y+.7-cam.position.y,e.z-cam.position.z)||1;
+        const blocked=this.world.raycast(cam.position.x,cam.position.y,cam.position.z,(e.x-cam.position.x)/soundDist,(e.y+.7-cam.position.y)/soundDist,(e.z-cam.position.z)/soundDist,soundDist)<soundDist-.8;
+        this.sfx.footstep(near,this.panOf(e.x,e.z),soft,st.crouch,st.sprint,blocked);
+      }
       const ally = st.team === this.myTeam;
       const downed = st.life === LIFE_DOWNED;
       pose.id = id; pose.x = e.x; pose.y = e.y; pose.z = e.z; pose.yaw = e.yaw; pose.pitch = e.pitch;
@@ -538,43 +610,92 @@ class Game {
     }
     s.end();
 
+    if(alive && this.footsteps.advance(-1,p.x,p.y,p.z,now,p.onGround&&this.myVehicleId===-1,p.crouch,p.prone,this.keys.has('ShiftLeft'))) this.sfx.footstep(0,0,this.world.surfaceAt(p.x,p.z)!==Surface.Concrete,p.crouch,this.keys.has('ShiftLeft'));
+    this.footsteps.prune(now);
     this.gs.grass.update(cam.position.x, cam.position.z, now / 1000);
     this.updateMovers(now / 1000);
 
+    this.vehicleRenderer?.update(this.vehicles, dt);
+    const driving = this.myVehicleId !== -1;
+    if (driving) {
+      this.vm.group.visible = false;
+      const myV = this.vehicles.find((v) => v.id === this.myVehicleId);
+      this.ui.setVehicleHud(true, (myV?.speed ?? 0) * 3.6, myV?.hp ?? 200, 200);
+    } else {
+      this.ui.setVehicleHud(false);
+    }
+
+    let actionHint = reviveHint;
+    if (!actionHint && alive) {
+      if (driving) {
+        actionHint = 'Pressione [E] para descer do veículo';
+      } else {
+        const vPos = getVendorPos(this.myTeam, this.world);
+        const distVendor = Math.hypot(p.x - vPos.x, p.z - vPos.z);
+        if (distVendor < 3.8) {
+          actionHint = 'Pressione [E] para falar com o Vendedor de Veículos';
+        } else {
+          const nearV = this.vehicles.find((v) => v.driverId === -1 && Math.hypot(p.x - v.x, p.z - v.z, p.y - v.y) < 3.0);
+          if (nearV) {
+            actionHint = `Pressione [E] para pilotar o ${VEHICLE_BY_ID[nearV.type]?.name ?? 'veículo'}`;
+          }
+        }
+      }
+    }
+
+    const equipment=getEquipmentVendorPos(this.myTeam,this.world);
+    if(alive && !driving && Math.hypot(p.x-equipment.x,p.y-equipment.y,p.z-equipment.z)<3.8) actionHint='[E] Comerciante de equipamento';
     const speed = Math.hypot(p.vx, p.vz);
     const reloading = !!this.own && (this.own.flags & 1) !== 0;
     const sprintingNow = alive && !p.prone && !p.crouch && speed > SPRINT_FLAG_SPEED && this.keys.has('ShiftLeft');
-    if (it?.weapon) this.vm.setWeapon(it, this.slot === 0 ? this.loadout?.sight : undefined);
+    if (it?.weapon) this.vm.setWeapon(it, this.slot === 0 ? this.loadout?.sight : undefined,!!(this.slot===0?this.loadout?.suppressor:this.loadout?.secondarySuppressor));
     this.vm.scoped = zoomEff <= 0.3;
-    this.vm.update(dt, speed, p.onGround, ads, reloading, sprintingNow, this.yaw - this.lastYaw, this.pitch - this.lastPitch, alive && !!w);
+    this.vm.update(dt, speed, p.onGround, ads, reloading, sprintingNow, this.yaw - this.lastYaw, this.pitch - this.lastPitch, alive && !!w && !driving);
     this.lastYaw = this.yaw; this.lastPitch = this.pitch;
     this.fx.update(dt);
     this.gs.render();
     if (!$('shop').classList.contains('hidden')) this.preview.render(now);
+    if (!$('board').classList.contains('hidden')) this.inventoryPreview.render(now);
 
     // HUD (10 Hz)
     if (now - this.hudAt > 100) {
       this.hudAt = now;
       const scoped = alive && zoomEff <= 0.3 && this.vm.adsAmount > 0.85;
       this.ui.aim(scoped);
-      this.ui.hint(reviveHint);
+      this.ui.hint(actionHint);
       if (this.own) this.ui.setVitals(alive ? this.own.hp : 0, alive ? Math.min(this.localAmmo, 999) : 0, alive ? this.own.reserve : 0, it?.name ?? '', reloading, this.slot === 0 ? this.loadout?.sight?.name ?? '' : '');
       this.ui.setStamina(p.stamina, p.tired, p.prone ? 'Deitado' : p.crouch ? 'Agachado' : p.tired ? 'Cansado' : 'Em pé');
       this.ui.setZone(whereIs(p.x, p.z, this.cz, this.hz), alive);
       if (this.life === LIFE_DOWNED) this.ui.downed(true, (this.downUntil - now) / 1000);
       const inField = alive || this.life === LIFE_DOWNED;
-      this.ui.minimap(inField ? cam.position.x : this.cz.x, inField ? cam.position.z : this.cz.z, inField ? this.yaw : 0, this.cz, this.hz, this.world.bases, this.fobs, dots, this.myTeam);
+      this.ui.minimap(inField ? cam.position.x : this.cz.x, inField ? cam.position.z : this.cz.z, inField ? this.yaw : 0, this.cz, this.hz, this.world.bases, this.fobs, dots, this.myTeam, this.vehicles);
       if (now - this.kbAt > 1000) { this.kbps = (this.bytesIn * 8) / (now - this.kbAt); this.bytesIn = 0; this.kbAt = now; }
       const info = this.gs.renderer.info.render;
       this.ui.perf(`${Math.round(this.fps)} fps · ${info.calls} draws · ${(info.triangles / 1000).toFixed(0)}k tris · ${this.ping} ms · ${this.kbps.toFixed(0)} kbps · ${this.ents.size + 1} em campo`);
-      if (this.keys.has('Tab') && now - this.boardAt > 1000) { this.boardAt = now; this.send({ t: 'board' }); }
+      if (!$('board').classList.contains('hidden') && now - this.boardAt > 1000) { this.boardAt = now; this.send({ t: 'board' }); }
     }
   }
 
   // ---------- eventos ----------
   bind() {
     addEventListener('keydown', (e) => {
-      if (e.code === 'Tab') { e.preventDefault(); if (this.ready && !this.keys.has('Tab')) { this.ui.show('board', true); this.boardAt = 0; } }
+      if (!$('shop').classList.contains('hidden') && this.life === LIFE_ALIVE) { if(e.code==='Escape') {this.ui.closeShop();this.lockInput();} return; }
+      if ((e.code === 'Tab' || e.code === 'KeyI') && this.ready && this.life !== LIFE_NONE) {
+        e.preventDefault(); if (e.repeat) return;
+        const opening = $('board').classList.contains('hidden');
+        this.ui.show('board', opening); this.ui.show('paused', false);
+        if (opening) {
+          this.ui.inventory(this.loadout); this.send({t:'inventory'}); this.boardAt = 0; this.send({ t: 'board' });
+          const lo = this.loadout;
+          this.inventoryPreview.set({armor:lo?.armor?.armor ?? 0,helmet:lo?.helmet?.helmet ?? 0,pack:lo?.pack?.pack ?? 0,gun:lo?.primary.idx ?? 0},this.myTeam);
+          this.mouseL = this.mouseR = false; this.keys.clear(); document.exitPointerLock();
+        } else this.lockInput();
+        return;
+      }
+      if (!$('board').classList.contains('hidden')) {
+        if (e.code === 'Escape') { this.ui.show('board', false); this.lockInput(); }
+        return;
+      }
       // Ctrl+W / Ctrl+S etc. não podem escapar para o navegador durante a partida
       if (this.ready && this.life !== LIFE_NONE && (e.ctrlKey || e.metaKey) && e.code !== 'KeyR') e.preventDefault();
       if (this.locked() && e.code === 'Space') e.preventDefault();
@@ -583,15 +704,42 @@ class Game {
       if (!this.ready || this.life === LIFE_NONE) return;
       if (e.code === 'KeyN') this.ui.cycleZoom(e.shiftKey ? -1 : 1);
       if (e.code === 'KeyZ' && this.life === LIFE_ALIVE) this.prone = !this.prone;
-      if ((e.code === 'KeyC' || e.code === 'Space') && this.life === LIFE_ALIVE) this.prone = false;
+      if ((e.code === 'KeyC' || e.code === 'ControlLeft' || e.code === 'ControlRight' || e.code === 'Space') && this.life === LIFE_ALIVE) this.prone = false;
       if (e.code === 'Digit1' && this.slot !== 0) { this.slot = 0; this.nextFire = this.simTime + 0.45; this.localAmmo = 0; this.lastShotAt = -1; }
       if (e.code === 'Digit2' && this.slot !== 1) { this.slot = 1; this.nextFire = this.simTime + 0.45; this.localAmmo = 0; this.lastShotAt = -1; }
       if (e.code === 'KeyR' && this.life === LIFE_ALIVE) this.sfx.reload();
+      if (e.code === 'KeyE' && this.life === LIFE_ALIVE) {
+        if (this.myVehicleId !== -1) {
+          this.send({ t: 'dismountVehicle' });
+          this.myVehicleId = -1;
+          this.sfx.stopEngine();
+        } else {
+          const equipment = getEquipmentVendorPos(this.myTeam,this.world);
+          if(Math.hypot(this.pred.x-equipment.x,this.pred.y-equipment.y,this.pred.z-equipment.z)<3.8){
+            this.ui.openMerchant(this.loadout,this.cargo);this.ui.show('paused',false);this.keys.clear();this.mouseL=this.mouseR=false;document.exitPointerLock();return;
+          }
+          const vPos = getVendorPos(this.myTeam, this.world);
+          const distVendor = Math.hypot(this.pred.x - vPos.x, this.pred.z - vPos.z);
+          if (distVendor < 3.8) {
+            if (this.locked()) document.exitPointerLock();
+            this.ui.openVehicleShop();
+          } else {
+            const nearV = this.vehicles.find((v) => v.driverId === -1 && Math.hypot(this.pred.x - v.x, this.pred.z - v.z, this.pred.y - v.y) < 3.0);
+            if (nearV) {
+              this.send({ t: 'mountVehicle', vehicleId: nearV.id });
+            }
+          }
+        }
+      }
+      if (e.code === 'Escape' && this.ui.isVehicleShopOpen()) {
+        this.ui.closeVehicleShop();
+        if (this.life === LIFE_ALIVE) this.lockInput();
+      }
       if (e.code === 'Space' && this.life === LIFE_DOWNED) this.send({ t: 'giveup' });
     });
     addEventListener('keyup', (e) => {
       this.keys.delete(e.code);
-      if (e.code === 'Tab') this.ui.show('board', false);
+
     });
     addEventListener('blur', () => { this.keys.clear(); this.mouseL = this.mouseR = false; });
     // fechar/recarregar a aba no meio da partida pede confirmação
@@ -615,8 +763,16 @@ class Game {
     document.addEventListener('pointerlockchange', () => {
       const on = this.locked();
       if (!on) { this.mouseL = this.mouseR = false; this.keys.clear(); }
-      this.ui.show('paused', !on && this.ready && this.life !== LIFE_NONE && !!this.ws);
+      this.ui.show('paused', !on && $('board').classList.contains('hidden') && $('shop').classList.contains('hidden') && this.ready && this.life !== LIFE_NONE && !!this.ws);
     });
+    const inventoryTab = (inventory: boolean) => {
+      this.ui.show('inventoryContent', inventory); this.ui.show('scoreContent', !inventory);
+      $('inventoryTab').classList.toggle('active', inventory); $('scoreTab').classList.toggle('active', !inventory);
+      if (!inventory) this.send({ t: 'board' });
+    };
+    $('inventoryTab').onclick = () => inventoryTab(true);
+    $('scoreTab').onclick = () => inventoryTab(false);
+    $('closeInventory').onclick = () => { this.ui.show('board', false); this.lockInput(); };
     $('resume').onclick = () => this.lockInput();
     $('play').onclick = async () => {
       this.sfx.unlock();
@@ -633,6 +789,10 @@ class Game {
       }
       if (!this.ws) this.connect(name);
     };
+    $('closeMerchant').onclick=()=>{if(this.life===LIFE_ALIVE){this.ui.closeShop();this.lockInput();}};
+    this.ui.onBuyEquipment=(items,magazines)=>this.send({t:'buyEquipment',items,magazines});
+    this.ui.onDiscardMagazine=slot=>this.send({t:'discardMagazine',slot});
+    this.ui.onMoveMagazine=(from,to)=>this.send({t:'moveMagazine',from,to});
     this.ui.onSpawn = (items) => this.spawn(items);
     this.ui.onPreview = (look) => this.preview.set(look, this.myTeam);
     try { $<HTMLInputElement>('name').value = localStorage.getItem('warbit.name') ?? ''; } catch { /* ignora */ }

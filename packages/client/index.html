@@ -161,6 +161,87 @@
   #board tr.me td { color: var(--gold); font-weight: 700; }
   #board tr.bot td:first-child { color: var(--dim); }
   #paused .panel { text-align: center; }
+
+  /* ---------- HUD de Veículo ---------- */
+  #vehHud { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 18px; text-align: center; min-width: 280px; box-shadow: 0 4px 16px rgba(0,0,0,.6); pointer-events: none; }
+  #vehSpeed { font-size: 32px; font-weight: 800; color: #fff; line-height: 1; }
+  #vehSpeed small { font-size: 14px; color: var(--dim); font-weight: 600; }
+  #vehHpRow { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; }
+  #vehHpBar { flex: 1; height: 8px; background: rgba(0,0,0,.5); border-radius: 4px; overflow: hidden; border: 1px solid rgba(255,255,255,.1); }
+  #vehHpBar i { display: block; height: 100%; background: #22c55e; width: 100%; transition: width .15s; }
+  #vehHpText { font-size: 12px; font-weight: 700; color: #e8ecef; min-width: 55px; }
+  #vehControls { font-size: 11px; color: var(--gold); margin-top: 4px; font-weight: 600; }
+
+  /* ---------- Loja de Veículos da Base ---------- */
+  .vehCard { background: #20262c; border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .vehCard.soon { opacity: .65; }
+  .vehCard .vHeader { display: flex; justify-content: space-between; align-items: center; }
+  .vehCard .vName { font-size: 16px; font-weight: 700; }
+  .vehCard .vBadge { font-size: 11px; padding: 2px 7px; border-radius: 4px; font-weight: 600; }
+  .vehCard .vBadge.avail { background: #1e3a29; color: #7ee08a; border: 1px solid #2e6940; }
+  .vehCard .vBadge.soon { background: #382c1e; color: #ffb36b; border: 1px solid #704f2b; }
+  .vehCard .vDesc { font-size: 12px; color: var(--dim); line-height: 1.4; min-height: 34px; }
+  .vehCard .vStats { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 11px; background: #15191d; border-radius: 6px; padding: 8px; margin-top: 2px; }
+  .vehCard .vStats span { color: var(--dim); }
+  .vehCard .vStats b { color: #fff; font-weight: 600; text-align: right; }
+  .vehCard .vFooter { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
+  .vehCard .vPrice { font-size: 18px; font-weight: 800; color: var(--gold); }
+
+/* Tactical merchant layout. */
+#shop .panel {width:100vw;height:100dvh;border:0;border-radius:0;padding:0 4vw 20px 8vw;background:linear-gradient(110deg,#191c1b,#2c302c);grid-template-columns:minmax(0,1fr) minmax(260px,32%);grid-template-rows:60px minmax(150px,28vh) auto minmax(0,1fr);gap:16px 3vw}
+#shop header {grid-column:1/-1;border-bottom:1px solid #777;align-items:center;text-transform:uppercase}
+#shop header h2 {font-size:16px;letter-spacing:1px} #shopMsg {font-size:11px}
+#equipment {grid-column:1;grid-row:2;min-height:0} #equipment h3 {font-size:11px;color:#aaa;font-weight:400;margin:0 0 8px}
+#slots {height:calc(100% - 24px);display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;overflow:auto;border:1px solid #555;border-radius:0;background:#202320;padding:8px}
+.slot {display:flex;flex-wrap:wrap;align-content:center;border:1px solid #ffffff20;padding:6px;min-width:0}.slot label {width:100%;text-transform:uppercase;font-size:10px}.slot .nm {font-size:12px}
+#tabs {grid-column:1;grid-row:3;display:flex;flex-direction:row;flex-wrap:wrap;gap:4px} #tabs button {border-radius:0;text-transform:uppercase;font-size:10px;padding:5px 8px;background:#292d29} #tabs button.on {border-color:#b99a41;color:#dab449;box-shadow:inset 0 -2px #b99a41}
+#items {grid-column:1;grid-row:4;min-height:0;border:1px solid #555;padding:8px}.grid {grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.item {border-radius:0;background:linear-gradient(#171a18,#30332e);min-width:0}.item .sil {height:65px;fill:#969e91}.item .n {font-size:12px;flex-wrap:wrap;font-weight:400}.item .d {font-size:10px}.item.sel {border-color:#b99a41;background:#383323}.item .n em {color:#a6c47b}
+#cart {grid-column:2;grid-row:2/5} #cart h3 {background:#727670;padding:6px;color:#eee;font-size:18px} #preview {height:clamp(190px,44vh,520px);border:1px solid #777;border-radius:0;background:radial-gradient(ellipse,#525c4f55,#101510)} #cart button {border-radius:0;font-size:11px;text-transform:uppercase} #spawnBase {background:#8e1c16;color:white;border-color:#b43324}.tot {border-bottom:1px solid #ffffff20;padding:4px}
+#right {left:24px;right:auto;top:auto;bottom:100px;width:210px} #minimap {width:210px;height:210px} #mmZoom {position:absolute;top:4px;left:4px;font-size:9px}
+#top {left:24px;top:auto;bottom:20px;transform:none;width:210px} #scores {gap:2px}.score {border-radius:0;padding:3px;border:0;border-top:3px solid #888}.score b {font-size:18px;font-weight:400}.score span {font-size:8px} #phase {display:block;font-size:9px;border-radius:0;margin:0;padding:2px} #zoneinfo {position:fixed;top:48px;left:50%;transform:translateX(-50%);font-size:12px}
+#wallet {position:fixed;top:10px;right:18px;display:flex;gap:12px;border-radius:0;margin:0;padding:5px 9px} #wallet .row {gap:8px;align-items:center} #wallet .row span {font-size:10px} #cash {color:#ddd} #xpbar {display:none} #perf {position:fixed;right:18px;top:48px} #rewards {top:78px;right:18px;font-size:12px} #feed {top:45%;left:24px;font-size:10px} #feed div {background:#10151055;border-radius:0} #bl {left:260px;width:190px;bottom:24px} #hpbar {height:5px;border-radius:0}
+@media(max-width:800px){#shop .panel {padding:0 12px 12px;gap:8px;grid-template-columns:minmax(0,1fr) 230px}.grid,#slots {grid-template-columns:repeat(2,minmax(0,1fr))}#shop header h2 {font-size:12px}}
+@media(max-height:650px){#shop .panel {grid-template-rows:48px 140px auto minmax(0,1fr);gap:8px 20px}#preview {height:180px}#minimap {width:160px;height:160px}#right,#top {width:160px}#bl {left:205px}}
+
+/* Minimal combat HUD and transparent in-match inventory. */
+#hptext,#hpbar,#stamrow,#perf,#helpkeys {display:none!important}
+#board {background:rgba(30,37,36,.48)!important;backdrop-filter:blur(8px);pointer-events:auto!important}
+.inventory-nav {position:absolute;top:0;left:0;right:0;height:54px;display:flex;align-items:stretch;padding:0 5%;background:#181b1be8;border-bottom:1px solid #888;gap:5px}
+.inventory-nav strong {font-size:32px;padding:0 20px}.inventory-nav button {border:0;border-radius:0;border-bottom:3px solid #777;background:transparent;font-size:11px;letter-spacing:2px;padding:0 20px;color:#999}.inventory-nav button.active {color:#dcbb60;border-color:#c9a043;background:linear-gradient(transparent,#b894232b)}
+#inventoryBalance {margin:auto 0 auto auto;border:1px solid #777;padding:4px 12px}
+#inventoryContent {position:absolute;inset:100px 3.5% 55px;display:grid;grid-template-columns:30% 34% 32%;gap:2%}
+#inventoryEquipment {display:grid;grid-template-rows:repeat(3,1fr) 24%;gap:6%;min-height:0}
+#inventoryPreview {width:100%;height:100%;min-height:0;background:transparent}
+.inventory-slot {position:relative;background:#151a19a8;border:1px solid #7776;min-height:60px;padding:12px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.inventory-slot .sil {width:80%;height:65%;fill:#888;opacity:.7}.inventory-slot span {position:absolute;bottom:4px;left:6px;font-size:10px;color:#aaa}.inventory-slot b {position:absolute;top:6px;right:7px;font-size:10px;font-weight:400;color:#bbb}
+.inventory-gear {display:grid;grid-template-columns:repeat(3,1fr);gap:8px;min-height:90px}.inventory-gear .inventory-slot {padding:4px}.inventory-gear .inventory-slot span {font-size:9px}
+#inventoryPack {display:flex;flex-direction:column;gap:16px}#inventoryPack>.inventory-slot {width:34%;height:100px}.pack-space {flex:1;border:1px solid #9998;background:#151a19a8;display:grid;place-items:center;color:#a95a4f;font-size:10px;letter-spacing:1px}
+#closeInventory {position:absolute;bottom:15px;left:3%;background:transparent;border:0}#board #scoreContent {width:90vw;background:#141918b8;border-radius:0}
+#shop .item .d,#shop .item .bars,#cart .note,#shopErr:empty {display:none}#shop .item {min-height:145px;position:relative;padding:12px 8px 30px}#shop .item .sil {height:85px;fill:#8c9188}#shop .item .n {position:absolute;bottom:0;left:0;right:0;padding:5px 7px;background:#ffffff12;font-size:11px}
+#shop .slot {background:#1b1e1d88}#shop .slot .pr {display:none}#shop .slot label {font-size:10px;letter-spacing:.5px}#cart .tot {font-size:12px}#wallet .row:nth-child(3),#wallet .row>span {display:none}#wallet {background:#1119;border:0}#feed div {background:transparent}
+
+/* Merchant composition: three equipment cards, weapon rack, character behind cargo. */
+#shop .panel {position:relative;padding:0 4vw 24px 9vw;grid-template-columns:59% 35%;grid-template-rows:48px 28vh 7vh 30px minmax(0,1fr) 26px;gap:10px 6%;background:repeating-linear-gradient(0deg,transparent 0 23px,#ffffff02 24px),repeating-linear-gradient(90deg,transparent 0 23px,#ffffff02 24px),#1c201e}
+#shop header {grid-row:1;gap:8px;z-index:3;background:#171a18;border-bottom:1px solid #666;margin:0 -4vw 0 -9vw;padding:0 3vw}
+#shop header h2 {font-size:12px;max-width:180px}#closeMerchant {padding:4px 10px;border-radius:0;font-size:24px;background:#333}
+#merchantSections {display:flex;height:100%;gap:4px}#merchantSections button {background:transparent;border:0;border-bottom:3px solid #888;border-radius:0;font-size:10px;letter-spacing:1px;padding:0 10px}#merchantSections button.on {color:#d4af46;border-color:#c5a03c;background:#a6801c18}#shopMsg {display:none}
+#equipment {grid-row:2;margin-top:5vh}#slots {display:grid;grid-template-columns:repeat(3,1fr);padding:12px;gap:12px;overflow:visible;background:transparent}
+#shop .slot {display:flex;flex-direction:column;position:relative;align-items:stretch;justify-content:center;padding:8px;border:1px solid #7777;cursor:pointer}
+#shop .slot .sil {height:65px;width:100%;object-fit:contain;opacity:.65}#shop .slot label {position:absolute;bottom:23px;left:7px;color:#aaa}#shop .slot .nm {font-size:9px;color:#777;position:absolute;top:5px;left:6px}#shop .slot small {position:absolute;left:0;right:0;bottom:0;border-top:1px solid #7775;padding:4px;font-size:9px;color:#777;text-align:center}#shop .slot>button {position:absolute;right:3px;top:3px;background:transparent;border:0}#shop .slot.active {border-color:#bb963b;background:linear-gradient(transparent,#a9801520)}
+#equipmentExtras {grid-column:1;grid-row:3;display:flex;flex-wrap:wrap;align-content:center;gap:4px;overflow:auto}#equipmentExtras button {font-size:9px;padding:3px 6px;border-radius:0;background:#ffffff08}
+#tabs {grid-row:4;flex-wrap:nowrap;overflow-x:auto;align-items:stretch;gap:3px}#tabs button {white-space:nowrap;font-size:9px;padding:3px 6px}#items {grid-row:5;padding:7px;background:transparent}.grid {grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}#shop .item {height:clamp(130px,21vh,190px);min-height:130px;border-color:#7778;background:linear-gradient(#151816,#2c302b)}#shop .item .sil {width:100%;height:85%;object-fit:contain}#shop .item .n {font-size:10px}#shop .item.sel {border-color:#b99a41}
+#cart {grid-column:2;grid-row:2/7;position:relative;overflow:hidden;display:flex;padding-top:10px;gap:6px}#cart>h3 {display:none}#preview {position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;z-index:0}#cart>*:not(#preview) {position:relative;z-index:1}#shopPackPanel {height:65%;min-height:160px;border:1px solid #858a7f;background:#10151066;flex-shrink:1}#shopPackPanel h3 {display:block;background:#767b73;margin:0;padding:4px 8px;font-size:19px;font-weight:400}#shopPackName {display:block;text-align:center;font-size:10px;color:#c2ba91;margin:12px 0}#shopCargo {padding:10px;overflow:auto;max-height:calc(100% - 75px)}#cart .tot {background:#101510bb;margin:0;padding:5px 8px;font-size:12px}#cartBtns {margin-top:auto}#repeatBtn {display:none}#clearBtn {grid-column:1/3}#spawnBase {padding:10px;background:#8f0f08;color:#fff;border:1px solid #b52c1c}#afterV {font-size:12px}#totalV {font-size:22px;color:white}
+#magazineShelf {grid-column:1;grid-row:5;display:none;align-content:start;gap:10px;padding:20px;border:1px solid #777}#shop.ammo-mode #items {display:none}#shop.ammo-mode #magazineShelf {display:grid;grid-template-columns:1fr 1fr}#shop.ammo-mode #tabs {visibility:hidden}.magazine {display:flex;align-items:center;gap:12px;border-radius:0;background:#222820;font-size:12px}.magazine i {font-style:normal;font-size:50px;color:#a9ad96}.magazine span {text-align:left}
+.cargo-label {font-size:9px;color:#b1b6ac;margin:8px 0}.cargo-grid {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}.cargo-slot {position:relative;border:1px solid #8886;border-radius:0;background:#141a17a8;min-height:72px;padding:4px;color:#9caa90;cursor:grab}.cargo-slot small {position:absolute;left:3px;top:2px;font-size:9px}.cargo-slot i {display:block;font-size:25px;font-style:normal}.cargo-slot span {font-size:8px;display:block}.cargo-slot.pending {border-color:#c2a14c}.cargo-slot:hover {border-color:#c2a14c}.weapon-icon {object-fit:contain}
+#shop.respawn-only .panel {display:flex;align-items:center;justify-content:center;background:#151a17c9}#shop.respawn-only .panel>* {display:none}#shop.respawn-only #cart {display:block;width:350px}#shop.respawn-only #cart>* {display:none}#shop.respawn-only #cartBtns {display:block}#shop.respawn-only #cartBtns>* {display:none}#shop.respawn-only #spawnBase {display:block;width:100%}#shop.respawn-only #preview {display:none}
+@media(max-width:850px){#shop .panel {padding-left:4vw;grid-template-columns:61% 35%;gap:8px 4%}#shop header {margin-left:-4vw}#shop header h2 {display:none}#merchantSections button {font-size:8px;padding:0 6px}#slots {gap:6px;padding:6px}#shop .slot small {font-size:7px}#tabs button {font-size:8px}#shop .slot label {font-size:9px}}
+
+#shop.accessory-mode .panel {grid-template-rows:48px 24vh 30px 30px minmax(0,1fr) 26px}
+#shop.accessory-mode #magazineShelf {display:block;grid-column:1;grid-row:5;width:38%;padding:10px;overflow:auto}
+#shop.accessory-mode #items {grid-column:1;grid-row:5;width:60%;justify-self:end}
+#shop.accessory-mode #items .grid {grid-template-columns:repeat(2,minmax(0,1fr))}
+.ammo-product {display:flex;flex-direction:column;gap:8px}.ammo-product strong {font-size:12px;color:#d9be70}.ammo-product button {font-size:10px;padding:8px;border-radius:0}.ammo-product small {font-size:10px;color:#aaa}.ammo-product .magazine i {font-size:28px}
+#team {width:100%;border-left:3px solid #ae9348}#team option[value="0"] {color:#65a1ff}#team option[value="1"] {color:#ff7979}#team option[value="2"] {color:#77df8a}
 </style>
 </head>
 <body>
@@ -190,6 +271,11 @@
   <div id="rewards"></div>
   <div id="center"></div>
   <div id="hint" class="hidden"></div>
+  <div id="vehHud" class="hidden">
+    <div id="vehSpeed"><b>0</b> <small>km/h</small></div>
+    <div id="vehHpRow"><div id="vehHpBar"><i></i></div><span id="vehHpText">200 HP</span></div>
+    <div id="vehControls">WASD: Pilotar · Espaço: Freio de mão · E: Descer</div>
+  </div>
   <div id="bl">
     <div id="hptext">100</div>
     <div id="hpbar"><i></i></div>
@@ -199,7 +285,7 @@
   <div id="br">
     <div id="ammo">0 <small>/ 0</small></div>
     <div id="weapon"></div>
-    <div id="helpkeys">Botão direito: mirar · Esq.: atirar · C agachar · Z deitar · N zoom do mapa</div>
+    <div id="helpkeys">Botão direito: mirar · Esq.: atirar · Ctrl agachar · Z deitar · N zoom do mapa</div>
   </div>
   <div id="downed" class="hidden">
     <h2>Você caiu</h2>
@@ -212,6 +298,7 @@
   <div class="panel">
     <h1>War<span>Bit</span></h1>
     <p>60 mercenários · 3 times · uma zona para dominar</p>
+    <div class="f"><select id="team" aria-label="Escolha seu time"><option value="-1">Time automático</option><option value="0">Azul</option><option value="1">Vermelho</option><option value="2">Verde</option></select></div>
     <div class="f"><input id="name" maxlength="16" placeholder="Seu apelido" /></div>
     <div class="f">
       <select id="quality"><option value="0.6">Gráfico: Baixo</option><option value="0.8">Gráfico: Médio</option><option value="1" selected>Gráfico: Alto</option></select>
@@ -223,7 +310,7 @@
     <button id="play" class="primary" style="width:100%;padding:12px">Entrar na guerra</button>
     <div id="status"></div>
     <div class="keys">
-      <div><b>WASD</b> mover · <b>Shift</b> correr</div><div><b>C</b> agachar · <b>Z</b> deitar</div>
+      <div><b>WASD</b> mover · <b>Shift</b> correr</div><div><b>Ctrl</b> agachar · <b>Z</b> deitar</div>
       <div><b>Botão direito</b> mirar</div><div><b>Botão esquerdo</b> atirar</div>
       <div><b>R</b> recarregar · <b>1/2</b> armas</div><div><b>E</b> reanimar aliado</div>
       <div><b>G</b> granada · <b>H</b> curar</div><div><b>B</b> sacos de areia · <b>F</b> FOB</div>
@@ -236,17 +323,16 @@
 <div id="shop" class="screen hidden">
   <div class="panel">
     <header>
-      <h2>Loja de equipamento</h2>
+      <button id="closeMerchant" aria-label="Fechar comerciante">❮</button><h2>Comerciante de equipamento</h2><nav id="merchantSections"><button data-section="weapons">EQUIPAMENTO</button><button data-section="accessories">ACESSÓRIOS</button><button data-section="gear">APETRECHOS</button><button data-section="tools">ITENS</button><button data-section="ammo">MUNIÇÃO</button></nav>
       <span id="shopMsg"></span>
       <span class="sp"></span>
       <span>Conta <b id="shopCash">$0</b></span>
     </header>
-    <nav id="tabs"></nav>
-    <div id="items"></div>
+    <section id="equipment"><h3>ESPAÇOS DE EQUIPAMENTO</h3><div id="slots"></div></section><nav id="tabs"></nav>
+    <div id="items"></div><div id="magazineShelf"></div><div id="equipmentExtras"></div>
     <aside id="cart">
       <h3>Seu equipamento</h3>
-      <canvas id="preview"></canvas>
-      <div id="slots"></div>
+      <canvas id="preview"></canvas><div id="shopPackPanel"><h3>MOCHILA</h3><span id="shopPackName"></span><div id="shopCargo"></div></div>
       <div class="tot"><span>Total desta compra</span><b id="totalV">$0</b></div>
       <div class="tot"><span>Saldo depois</span><b id="afterV">$0</b></div>
       <div id="shopErr"></div>
@@ -260,12 +346,34 @@
   </div>
 </div>
 
-<div id="board" class="screen hidden" style="pointer-events:none;background:rgba(8,11,14,.45)">
-  <div class="panel"><div class="cols" id="boardCols"></div></div>
+<div id="board" class="screen hidden">
+  <header class="inventory-nav"><strong>◈</strong><button id="inventoryTab" class="active">INVENTÁRIO</button><button id="scoreTab">PLACAR</button><span id="inventoryBalance"></span></header>
+  <div id="inventoryContent"><section id="inventoryEquipment"></section><canvas id="inventoryPreview"></canvas><section id="inventoryPack"></section></div>
+  <div id="scoreContent" class="panel hidden"><div class="cols" id="boardCols"></div></div>
+  <button id="closeInventory">ESC &nbsp; Fechar</button>
 </div>
 
 <div id="paused" class="screen hidden">
   <div class="panel"><h2 style="margin-top:0">Pausado</h2><p style="color:var(--dim)">A partida continua rolando.</p><button id="resume" class="primary">Voltar ao jogo</button></div>
+</div>
+
+<div id="vehicleShop" class="screen hidden">
+  <div class="panel" style="width: min(840px, 95vw); max-height: 86vh; display: flex; flex-direction: column;">
+    <header style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line); padding-bottom:12px; margin-bottom:16px;">
+      <div>
+        <h2 style="margin:0; font-size:22px; display:flex; align-items:center; gap:8px;">
+          <span style="color:var(--gold)">Garagem da Base</span> · Vendedor de Veículos
+        </h2>
+        <div style="color:var(--dim); font-size:12px; margin-top:4px;">Compre veículos para sair rápido da base e avançar para a frente de batalha</div>
+      </div>
+      <div style="font-size:16px;">Conta: <b id="vehShopCash" style="color:var(--gold); font-size:20px;">$0</b></div>
+    </header>
+    <div id="vehGrid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap:14px; overflow-y:auto; padding-right:4px;">
+    </div>
+    <div style="margin-top:16px; display:flex; justify-content:flex-end;">
+      <button id="closeVehShop" style="padding:10px 22px;">Fechar [Esc]</button>
+    </div>
+  </div>
 </div>
 
 <script type="module" src="/src/main.ts"></script>

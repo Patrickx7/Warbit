@@ -1,6 +1,6 @@
 import { RECRUIT_DISCOUNT, RECRUIT_DISCOUNT_MAX_LEVEL } from './config';
 
-export type Slot = 'primary' | 'secondary' | 'armor' | 'helmet' | 'vest' | 'tool' | 'sight' | 'pack';
+export type Slot = 'primary' | 'secondary' | 'armor' | 'helmet' | 'vest' | 'tool' | 'sight' | 'pack' | 'suppressor' | 'secondarySuppressor';
 export type SightKind = 'reddot' | 'holo' | 'scope';
 export type Track = 'Miras' | 'Básico' | 'Assalto' | 'Infantaria' | 'Médica' | 'Construção' | 'Recon' | 'Suporte' | 'Veículos';
 export type WeaponClass = 'pistol' | 'rifle' | 'smg' | 'shotgun' | 'sniper';
@@ -49,6 +49,8 @@ const W = (cls: WeaponClass, dmg: number, rpm: number, mag: number, reload: numb
   ({ cls, dmg, rpm, mag, reload, spread, adsSpread, auto, falloffStart, falloffEnd, minDmgMul, headMul, recoil, zoom, pellets });
 
 const DEFS: Def[] = [
+  { id:'silenciador', name:'Silenciador principal',slot:'suppressor',track:'Infantaria',price:700,level:1,desc:'Reduz som e clarão dos disparos da arma principal.' },
+  { id:'silenciador_pistola', name:'Silenciador de pistola',slot:'secondarySuppressor',track:'Assalto',price:350,level:1,desc:'Reduz som e clarão da arma reserva.' },
   // --- kit básico gratuito ---
   { id: 'pistola', name: 'Pistola padrão', slot: 'secondary', track: 'Básico', price: 0, level: 1, desc: 'Grátis. Sempre disponível.', weapon: W('pistol', 22, 360, 12, 1.5, 0.022, 0.008, false, 15, 50, 0.5, 2.0, 1.4, 0.85) },
   { id: 'fuzil_basico', name: 'Fuzil básico', slot: 'primary', track: 'Básico', price: 0, level: 1, desc: 'Grátis. Semiautomático, fraco mas confiável.', weapon: W('rifle', 24, 300, 15, 2.4, 0.028, 0.006, false, 40, 140, 0.6, 1.8, 1.6, 0.7) },
@@ -72,8 +74,8 @@ const DEFS: Def[] = [
   { id: 'sniper_pesado', name: 'Sniper pesado', slot: 'primary', track: 'Recon', price: 6400, level: 9, desc: 'Fura blindagem média.', weapon: W('sniper', 104, 38, 5, 3.4, 0.075, 0.0007, false, 220, 550, 0.88, 2.5, 7.5, 0.2) },
   { id: 'antimaterial', name: 'Antimaterial', slot: 'primary', track: 'Recon', price: 8800, level: 12, desc: 'Um tiro. Qualquer blindagem.', weapon: W('sniper', 150, 28, 4, 4.0, 0.09, 0.0006, false, 300, 600, 0.9, 2.5, 10, 0.18) },
   // --- metralhadoras (Fase 2) ---
-  { id: 'mtr_leve', name: 'Metralhadora leve', slot: 'primary', track: 'Suporte', price: 3200, level: 5, desc: 'Fase 2.', soon: true },
-  { id: 'mtr_media', name: 'Metralhadora média', slot: 'primary', track: 'Suporte', price: 4300, level: 8, desc: 'Fase 2.', soon: true },
+  { id: 'mtr_leve', name: 'Metralhadora leve', slot: 'primary', track: 'Suporte', price: 3200, level: 5, desc: 'Metralhadora leve de apoio.', weapon: W('rifle', 24, 700, 60, 4.8, 0.045, 0.009, true, 60, 190, 0.65, 1.8, 1.7, 0.72) },
+  { id: 'mtr_media', name: 'Metralhadora média', slot: 'primary', track: 'Suporte', price: 4300, level: 8, desc: 'Metralhadora média de apoio.', weapon: W('rifle', 32, 580, 80, 5.8, 0.05, 0.01, true, 80, 240, 0.7, 1.8, 2.2, 0.72) },
   // --- miras (preços estimados: o WarDogs não publicou) ---
   { id: 'mira_pontovermelho', name: 'Mira ponto vermelho', slot: 'sight', track: 'Miras', price: 350, level: 1, desc: 'Ponto vermelho em janela aberta. Pequeno aumento.', sight: { zoom: 0.8, kind: 'reddot' } },
   { id: 'mira_holografica', name: 'Mira holográfica', slot: 'sight', track: 'Miras', price: 600, level: 2, desc: 'Retículo em anel, rápido de alinhar.', sight: { zoom: 0.76, kind: 'holo' } },
@@ -82,13 +84,13 @@ const DEFS: Def[] = [
   { id: 'mira_6x', name: 'Luneta 6x', slot: 'sight', track: 'Miras', price: 1400, level: 6, desc: 'Só para armas de precisão.', sight: { zoom: 0.18, kind: 'scope', sniperOnly: true } },
   { id: 'mira_8x', name: 'Luneta 8x', slot: 'sight', track: 'Miras', price: 2000, level: 8, desc: 'Só para armas de precisão. Longuíssimo alcance.', sight: { zoom: 0.13, kind: 'scope', sniperOnly: true } },
   // --- mochilas (preços estimados): mais munição, e o soldado muda de visual ---
-  { id: 'mochila_pequena', name: 'Mochila de assalto', slot: 'pack', track: 'Infantaria', price: 150, level: 1, desc: 'Pequena e discreta. +1 carregador.', pack: 1, mags: 1 },
-  { id: 'mochila_media', name: 'Mochila média', slot: 'pack', track: 'Infantaria', price: 400, level: 2, desc: 'Com saco de dormir e bolsos laterais. +3 carregadores.', pack: 2, mags: 3 },
-  { id: 'mochila_grande', name: 'Mochila grande', slot: 'pack', track: 'Infantaria', price: 800, level: 4, desc: 'Mochila de patrulha com faixas de fixação. +5 carregadores.', pack: 3, mags: 5 },
+  { id: 'mochila_pequena', name: 'Mochila de assalto', slot: 'pack', track: 'Infantaria', price: 150, level: 1, desc: 'Pequena e discreta. 1 espaço vazio.', pack: 1, mags: 1 },
+  { id: 'mochila_media', name: 'Mochila média', slot: 'pack', track: 'Infantaria', price: 400, level: 2, desc: 'Com saco de dormir e bolsos laterais. 3 espaços vazios.', pack: 2, mags: 3 },
+  { id: 'mochila_grande', name: 'Mochila grande', slot: 'pack', track: 'Infantaria', price: 800, level: 4, desc: 'Mochila de patrulha com faixas de fixação. 5 espaços vazios.', pack: 3, mags: 5 },
   // --- coletes táticos (munição) ---
-  { id: 'colete_p', name: 'Colete tático P', slot: 'vest', track: 'Infantaria', price: 100, level: 1, desc: '+2 carregadores.', mags: 2 },
-  { id: 'colete_m', name: 'Colete tático M', slot: 'vest', track: 'Infantaria', price: 250, level: 1, desc: '+4 carregadores.', mags: 4 },
-  { id: 'colete_g', name: 'Colete tático G', slot: 'vest', track: 'Infantaria', price: 400, level: 3, desc: '+6 carregadores.', mags: 6 },
+  { id: 'colete_p', name: 'Colete tático P', slot: 'vest', track: 'Infantaria', price: 100, level: 1, desc: '2 espaços vazios.', mags: 2 },
+  { id: 'colete_m', name: 'Colete tático M', slot: 'vest', track: 'Infantaria', price: 250, level: 1, desc: '4 espaços vazios.', mags: 4 },
+  { id: 'colete_g', name: 'Colete tático G', slot: 'vest', track: 'Infantaria', price: 400, level: 3, desc: '6 espaços vazios.', mags: 6 },
   // --- blindagem ---
   { id: 'blind_1', name: 'Blindagem nível 1', slot: 'armor', track: 'Infantaria', price: 400, level: 1, desc: '-15% de dano no corpo.', armor: 1 },
   { id: 'blind_2', name: 'Blindagem nível 2', slot: 'armor', track: 'Infantaria', price: 1000, level: 2, desc: '-25% de dano no corpo.', armor: 2 },
@@ -146,6 +148,8 @@ export interface Loadout {
   helmet?: Item;
   vest?: Item;
   sight?: Item;
+  suppressor?: Item;
+  secondarySuppressor?: Item;
   pack?: Item;
   tools: Item[];
   cost: number;
@@ -155,7 +159,7 @@ export type LoadoutResult = { ok: true; loadout: Loadout } | { ok: false; error:
 
 /** Valida uma lista de ids de itens e calcula o custo. Usado pelo servidor (autoridade) e pelo cliente (pré-visualização). */
 export function buildLoadout(ids: string[], level: number, cash: number): LoadoutResult {
-  let primary: Item | undefined, secondary: Item | undefined, armor: Item | undefined, helmet: Item | undefined, vest: Item | undefined, sight: Item | undefined, pack: Item | undefined;
+  let primary: Item | undefined, secondary: Item | undefined, armor: Item | undefined, helmet: Item | undefined, vest: Item | undefined, sight: Item | undefined, pack: Item | undefined, suppressor: Item | undefined, secondarySuppressor: Item | undefined;
   const tools: Item[] = [];
   const seen = new Set<string>();
   for (const id of ids) {
@@ -172,6 +176,8 @@ export function buildLoadout(ids: string[], level: number, cash: number): Loadou
       case 'helmet': if (helmet) return { ok: false, error: 'Só um capacete' }; helmet = it; break;
       case 'vest': if (vest) return { ok: false, error: 'Só um colete' }; vest = it; break;
       case 'pack': if (pack) return { ok: false, error: 'Só uma mochila' }; pack = it; break;
+      case 'suppressor': if(suppressor) return {ok:false,error:'Só um silenciador principal'}; suppressor=it; break;
+      case 'secondarySuppressor': if(secondarySuppressor) return {ok:false,error:'Só um silenciador de pistola'}; secondarySuppressor=it; break;
       case 'sight': if (sight) return { ok: false, error: 'Só uma mira' }; sight = it; break;
       case 'tool': tools.push(it); break;
     }
@@ -181,10 +187,10 @@ export function buildLoadout(ids: string[], level: number, cash: number): Loadou
   primary ??= ITEM_BY_ID[FREE_PRIMARY];
   secondary ??= ITEM_BY_ID[FREE_SECONDARY];
   if (sight?.sight?.sniperOnly && primary.weapon?.cls !== 'sniper') return { ok: false, error: `${sight.name} só serve em arma de precisão` };
-  const all = [primary, secondary, armor, helmet, vest, sight, pack, ...tools].filter(Boolean) as Item[];
+  const all = [primary, secondary, armor, helmet, vest, sight, pack, suppressor, secondarySuppressor, ...tools].filter(Boolean) as Item[];
   const cost = all.reduce((s, it) => s + priceFor(it, level), 0);
   if (cost > cash) return { ok: false, error: 'Saldo insuficiente' };
-  return { ok: true, loadout: { primary, secondary, armor, helmet, vest, sight, pack, tools, cost } };
+  return { ok: true, loadout: { primary, secondary, armor, helmet, vest, sight, pack, suppressor, secondarySuppressor, tools, cost } };
 }
 
 /** Kits que os bots compram (jogadores montam o próprio na loja). */

@@ -78,7 +78,7 @@ export class Grass {
         const r = hash2(i + k * 7, j - k * 3, seed + 3);
         this.q.setFromAxisAngle(this.up, r * 6.283);
         const field = surf === Surface.Field;
-        const hgt = field ? 0.9 + r * 0.45 : 0.32 + r * 0.42;
+        const hgt = field ? 0.3 + r * 0.2 : 0.15 + r * 0.2;
         const wid = 0.8 + r * 0.6;
         this.m.compose(this.p.set(gx, gy - 0.03, gz), this.q, this.s.set(wid, hgt, wid));
         this.mesh.setMatrixAt(n, this.m);

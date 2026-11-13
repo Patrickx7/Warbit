@@ -1,3 +1,4 @@
+import type { Magazine } from '@warbit/shared';
 import { BOT_START_CASH, LIFE_NONE, levelFromXp, newMoveState, type InputMsg, type Loadout, type MoveState } from '@warbit/shared';
 import type { Profile } from '../db';
 import type { BotBrain } from './Bots';
@@ -32,6 +33,7 @@ export class Player {
   loadout: Loadout | null = null;
   slot = 0;
   ammo = [0, 0];
+  cargo: (Magazine | null)[] = [];
   reserve = [0, 0];
   reloadEnd = 0;
   nextFire = 0;
@@ -43,6 +45,7 @@ export class Player {
   hasDefib = false;
   hasMark = false;
   hasFob = false;
+  vehicleId = -1;
   lastFireTick = -99999;
   maxReserve = [0, 0];
   lastAttacker = -1;

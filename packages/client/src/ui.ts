@@ -1,6 +1,8 @@
+import { cargoCapacity, loadoutIds, MAGAZINE_PRICE, type Magazine } from '@warbit/shared';
+import { weaponIcon } from './render/itemIcons';
 import {
   BoxKind, ITEMS, ITEM_BY_ID, MAX_TOOLS, SCORE_PER_PRESENCE_SECOND, SCORE_TO_WIN, Surface, TEAM_CSS, TEAM_NAMES, WORLD_SIZE, buildLoadout,
-  levelFromXp, priceFor, xpForLevel, type Item, type RosterEntry, type World, type Zone, type ZoneWhere, type WeaponStats,
+  levelFromXp, priceFor, xpForLevel, VEHICLES, VEHICLE_BY_ID, type VehicleState, type Item, type RosterEntry, type World, type Zone, type ZoneWhere, type WeaponStats, type Loadout,
 } from '@warbit/shared';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -15,8 +17,14 @@ export interface MapFob { team: number; x: number; z: number }
 // ---------- categorias da loja ----------
 interface Cat { id: string; label: string; match: (i: Item) => boolean }
 const CATS: Cat[] = [
-  { id: 'primary', label: 'Arma principal', match: (i) => i.slot === 'primary' && !i.soon },
+  { id: 'primary', label: 'Fuzil de assalto', match: (i) => i.weapon?.cls === 'rifle' && !i.id.startsWith('mtr_') },
+  { id: 'smg', label: 'SMG', match: (i) => i.weapon?.cls === 'smg' },
+  { id: 'shotgun', label: 'Espingarda', match: (i) => i.weapon?.cls === 'shotgun' },
+  { id: 'lmg', label: 'ML', match: (i) => i.id.startsWith('mtr_') },
+  { id: 'dmr', label: 'Fuzil de atirador', match: (i) => i.id === 'rifle_semi' },
+  { id: 'sniper', label: 'Fuzil', match: (i) => i.weapon?.cls === 'sniper' && i.id !== 'rifle_semi' },
   { id: 'secondary', label: 'Arma secundária', match: (i) => i.slot === 'secondary' && !i.soon },
+  { id: 'suppressor', label: 'Silenciadores', match: (i) => i.slot === 'suppressor' || i.slot === 'secondarySuppressor' },
   { id: 'sight', label: 'Miras', match: (i) => i.slot === 'sight' },
   { id: 'armor', label: 'Proteção', match: (i) => (i.slot === 'armor' || i.slot === 'helmet' || i.slot === 'vest') && !i.soon },
   { id: 'pack', label: 'Mochilas', match: (i) => i.slot === 'pack' },
@@ -43,7 +51,11 @@ const packSvg = (t: number) => t === 1
     ? '<rect x="24" y="8" width="32" height="22" rx="4"/><rect x="22" y="2" width="36" height="7" rx="3"/><rect x="18" y="14" width="6" height="12" rx="2"/><rect x="56" y="14" width="6" height="12" rx="2"/>'
     : '<rect x="22" y="4" width="36" height="26" rx="5"/><rect x="14" y="10" width="8" height="16" rx="2"/><rect x="58" y="10" width="8" height="16" rx="2"/><rect x="28" y="16" width="24" height="12" rx="2" fill="#7d6e3c"/><rect x="26" y="0" width="28" height="6" rx="2"/>';
 function silhouette(it: Item): string {
-  const body = it.weapon ? GUN_SVG[it.weapon.cls] : it.sight ? sightSvg(it) : it.pack ? packSvg(it.pack) : '';
+  if (it.weapon) return `<img class="sil weapon-icon" alt="${esc(it.name)}" src="${weaponIcon(it.id)}">`;
+  if (it.tool) return `<svg class="sil" viewBox="0 0 80 40">${it.tool === 'mark' ? '<rect x="18" y="8" width="16" height="24" rx="5"/><rect x="46" y="8" width="16" height="24" rx="5"/><rect x="30" y="14" width="20" height="8"/>' : '<rect x="18" y="8" width="44" height="28" rx="4"/><path d="M35 11h10v8h8v8h-8v8H35v-8h-8v-8h8z" fill="#ddd"/>'}</svg>`;
+
+  if(it.slot==='suppressor'||it.slot==='secondarySuppressor')return '<svg class="sil" viewBox="0 0 80 30"><rect x="8" y="9" width="58" height="12" rx="4"/><path d="M18 10v10M26 10v10M34 10v10M42 10v10" stroke="#777"/></svg>';
+  const body = it.sight ? sightSvg(it) : it.pack ? packSvg(it.pack) : '';
   if (!body) return '';
   return `<svg viewBox="0 0 80 30" class="sil">${body}</svg>`;
 }
@@ -59,6 +71,15 @@ export class UI {
   /** nada vem marcado: o jogador escolhe item por item */
   private sel = new Set<string>();
   private cat = 'primary';
+  private merchant = false;
+  private owned = new Set<string>();
+  private cargo: (Magazine | null)[] = [];
+  private pendingMags = new Map<number,string>();
+  private accessoryWeapon = 'fuzil_basico';
+  onBuyEquipment: (items:string[], magazines:{slot:number;weapon:string}[])=>void = ()=>{};
+  onDiscardMagazine: (slot:number)=>void = ()=>{};
+  onMoveMagazine: (from:number,to:number)=>void = ()=>{};
+
   private lastBuy: string[] = [];
   private waitUntil = 0;
   private centerTimer = 0;
@@ -71,6 +92,7 @@ export class UI {
   onSpawn: (items: string[]) => void = () => {};
   /** chamado a cada mudança no carrinho: atualiza a prévia 3D do soldado */
   onPreview: (look: { armor: number; helmet: number; pack: number; gun: number }) => void = () => {};
+  onBuyVehicle: (vehicleType: string) => void = () => {};
 
   constructor() {
     try { this.lastBuy = (JSON.parse(localStorage.getItem('warbit.lastBuy') ?? '[]') as string[]).filter((id) => ITEM_BY_ID[id]); } catch { /* sem armazenamento */ }
@@ -79,10 +101,13 @@ export class UI {
       const items = [...this.sel];
       this.lastBuy = items;
       try { localStorage.setItem('warbit.lastBuy', JSON.stringify(items)); } catch { /* ignora */ }
-      this.onSpawn(items);
+      if (this.merchant) this.onBuyEquipment(items,[...this.pendingMags].map(([slot,weapon])=>({slot,weapon})));
+      else this.onSpawn([]);
     };
     $('repeatBtn').onclick = () => { this.sel = new Set(this.lastBuy.filter((id) => this.available(ITEM_BY_ID[id]))); this.renderShop(); };
-    $('clearBtn').onclick = () => { this.sel.clear(); this.renderShop(); };
+    $('clearBtn').onclick = () => { this.pendingMags.clear(); this.sel = new Set(this.owned); this.renderShop(); };
+    $('closeVehShop').onclick = () => this.closeVehicleShop();
+    for(const b of $('merchantSections').querySelectorAll<HTMLElement>('[data-section]')) b.onclick=()=>this.section(b.dataset.section!);
     const tabs = $('tabs');
     for (const c of CATS) {
       const b = document.createElement('button');
@@ -135,7 +160,75 @@ export class UI {
     const a = xpForLevel(p.level), b = xpForLevel(p.level + 1);
     ($('xpbar').firstElementChild as HTMLElement).style.width = Math.max(0, Math.min(100, ((p.xp - a) / (b - a)) * 100)) + '%';
     $('shopCash').textContent = money(p.cash);
+    $('vehShopCash').textContent = money(p.cash);
     if (!$('shop').classList.contains('hidden')) this.renderShop();
+    if (!$('vehicleShop').classList.contains('hidden')) this.renderVehicleShop();
+  }
+
+  // ---------- Loja de Veículos ----------
+  openVehicleShop() {
+    $('vehShopCash').textContent = money(this.profile.cash);
+    this.renderVehicleShop();
+    this.show('vehicleShop', true);
+  }
+
+  closeVehicleShop() {
+    this.show('vehicleShop', false);
+  }
+
+  isVehicleShopOpen(): boolean {
+    return !$('vehicleShop').classList.contains('hidden');
+  }
+
+  renderVehicleShop() {
+    const grid = $('vehGrid');
+    grid.innerHTML = '';
+    for (const v of VEHICLES) {
+      const card = document.createElement('div');
+      card.className = `vehCard ${v.soon ? 'soon' : ''}`;
+      const canAfford = this.profile.cash >= v.price;
+      const speedKmh = Math.round(v.topSpeed * 3.6);
+      card.innerHTML = `
+        <div class="vHeader">
+          <div class="vName">${esc(v.name)}</div>
+          <span class="vBadge ${v.soon ? 'soon' : 'avail'}">${v.soon ? 'Em Breve' : 'Disponível'}</span>
+        </div>
+        <div class="vDesc">${esc(v.description)}</div>
+        <div class="vStats">
+          <div><span>Velocidade máx.</span> <b>${speedKmh} km/h</b></div>
+          <div><span>Blindagem</span> <b>${v.maxHp} HP</b></div>
+          <div><span>Aceleração</span> <b>${v.accel >= 14 ? 'Alta' : 'Média'}</b></div>
+          <div><span>Tração</span> <b>4x4 Off-Road</b></div>
+        </div>
+        <div class="vFooter">
+          <div class="vPrice">${money(v.price)}</div>
+          <button class="${v.soon ? '' : 'primary'}" ${v.soon || !canAfford ? 'disabled' : ''}>
+            ${v.soon ? 'Em desenvolvimento' : canAfford ? 'Comprar e Pilotar' : 'Saldo insuficiente'}
+          </button>
+        </div>
+      `;
+      if (!v.soon && canAfford) {
+        card.querySelector('button')!.onclick = () => {
+          this.closeVehicleShop();
+          this.onBuyVehicle(v.id);
+        };
+      }
+      grid.appendChild(card);
+    }
+  }
+
+  setVehicleHud(active: boolean, speedKmh = 0, hp = 200, maxHp = 200) {
+    const el = $('vehHud');
+    el.classList.toggle('hidden', !active);
+    if (!active) return;
+    $('vehSpeed').innerHTML = `<b>${Math.round(Math.abs(speedKmh))}</b> <small>km/h</small>`;
+    const pct = Math.max(0, Math.min(100, Math.round((hp / maxHp) * 100)));
+    const bar = $('vehHpBar').firstElementChild as HTMLElement;
+    if (bar) {
+      bar.style.width = pct + '%';
+      bar.style.background = pct > 50 ? '#22c55e' : pct > 25 ? '#f59e0b' : '#ef4444';
+    }
+    $('vehHpText').textContent = `${Math.ceil(hp)} HP`;
   }
 
   setVitals(hp: number, ammo: number, reserve: number, weapon: string, reloading: boolean, sight: string) {
@@ -220,7 +313,25 @@ export class UI {
     return !!it && !it.soon && it.level <= this.profile.level;
   }
 
+  private section(section:string) {
+    $('shop').classList.toggle('ammo-mode',section==='ammo');
+    $('shop').classList.toggle('accessory-mode',section==='accessories');
+    const groups:Record<string,string[]>={weapons:['primary','smg','shotgun','lmg','dmr','sniper'],secondary:['secondary'],specialist:['medic','recon'],gear:['armor','pack','sight'],tools:['medic','build','recon','util','soon'],ammo:[],accessories:this.accessoryWeapon==='pistola'||ITEM_BY_ID[this.accessoryWeapon]?.slot==='secondary'?['suppressor']:['sight','suppressor']};
+    const cats=groups[section]??groups.weapons;
+    for(const b of Array.from($('tabs').children) as HTMLElement[]) b.classList.toggle('hidden',!cats.includes(b.dataset.cat!));
+    for(const b of $('merchantSections').querySelectorAll<HTMLElement>('[data-section]')) b.classList.toggle('on',b.dataset.section===section);
+    if(cats.length)this.cat=cats[0];this.renderShop();
+  }
+  openMerchant(lo: Loadout | null, cargo: (Magazine|null)[]) {
+    this.merchant=true; this.owned=new Set(lo ? loadoutIds(lo):[]);this.sel=new Set(this.owned);
+    this.cargo=cargo;this.pendingMags.clear();this.waitUntil=0;
+    $('shop').classList.remove('respawn-only');$('shopMsg').textContent='';
+    this.show('shop',true);this.section('weapons');this.renderShop();this.tickWait();
+  }
+  setCargo(cargo:(Magazine|null)[]) { this.cargo=cargo; }
   openShop(msg: string, waitSeconds = 0) {
+    this.merchant=false;$('shop').classList.add('respawn-only');this.pendingMags.clear();
+
     $('shopMsg').textContent = msg;
     $('shopErr').textContent = '';
     this.sel.clear(); // nunca vem nada marcado
@@ -229,6 +340,42 @@ export class UI {
     this.renderShop();
     this.tickWait();
   }
+  inventory(lo: Loadout | null) {
+    const card = (label: string, it?: Item) => `<div class="inventory-slot">${it ? silhouette(it) : '<div class="empty-outline"></div>'}<span>${esc(label)}</span><b>${it ? esc(it.name) : 'VAZIO'}</b></div>`;
+    $('inventoryEquipment').innerHTML = card('ARMA PRIMÁRIA', lo?.primary) + card('ARMA RESERVA', lo?.secondary)
+      + card('ESPECIALISTA', lo?.tools[0]) + `<div class="inventory-gear">${card('CAPACETE',lo?.helmet)}${card('ARMADURA',lo?.armor)}${card('COLETE',lo?.vest)}</div>`;
+    $('inventoryPack').innerHTML = card('MOCHILA',lo?.pack) + (lo ? this.cargoHtml(lo,false) : '') + `<div class="inventory-gear">${(lo?.tools ?? []).map(i => card('ITEM', i)).join('')}</div>`;
+    this.bindCargo($('inventoryPack'),false);
+    $('inventoryBalance').textContent = money(this.profile.cash);
+  }
+  private cargoHtml(lo:Loadout,shop:boolean) {
+    return `<div class="cargo-label">BOLSOS / COLETE / MOCHILA · ${cargoCapacity(lo)} ESPAÇOS · BOTÃO DIREITO: DESCARTAR</div><div class="cargo-grid">${Array.from({length:cargoCapacity(lo)},(_,i)=>{
+      const pending=shop?this.pendingMags.get(i):undefined;
+      const m=pending?{weapon:pending,rounds:ITEM_BY_ID[pending].weapon!.mag}:this.cargo[i];
+      const rounds=m?.rounds??0;
+      return `<button class="cargo-slot ${pending?'pending':''}" data-cargo="${i}" draggable="${!!m}" title="${m?esc(ITEM_BY_ID[m.weapon]?.name ?? m.weapon):'Espaço vazio'}"><small>${i+1}</small>${m?`<i>▥</i><span>${esc(ITEM_BY_ID[m.weapon]?.name ?? m.weapon)}<br>${rounds} balas</span>`:'<i>+</i>'}</button>`;
+    }).join('')}</div>`;
+  }
+  private bindCargo(root:HTMLElement,shop:boolean) {
+    for(const el of root.querySelectorAll<HTMLElement>('[data-cargo]')) {
+      const to=Number(el.dataset.cargo);
+      el.ondragstart=e=>e.dataTransfer?.setData('text/plain','slot:'+to);
+      el.ondragover=e=>e.preventDefault();
+      el.ondrop=e=>{
+        e.preventDefault();const data=e.dataTransfer?.getData('text/plain')??'';
+        if(shop && data.startsWith('buy:') && !this.cargo[to] && !this.pendingMags.has(to)) {
+          const weapon=data.slice(4);if(!ITEM_BY_ID[weapon]?.weapon)return;
+          this.pendingMags.set(to,weapon);this.renderShop();
+        } else if(data.startsWith('slot:')) {
+          const from=Number(data.slice(5));
+          if(shop){const weapon=this.pendingMags.get(from);if(weapon&&!this.cargo[to]&&!this.pendingMags.has(to)){this.pendingMags.delete(from);this.pendingMags.set(to,weapon);this.renderShop();}}
+          else this.onMoveMagazine(from,to);
+        }
+      };
+      if(!shop) el.oncontextmenu=e=>{e.preventDefault();this.onDiscardMagazine(to);};
+      if(shop) el.onclick=()=>{this.pendingMags.delete(to);this.renderShop();};
+    }
+  }
   closeShop() { this.show('shop', false); }
   shopError(e: string) { $('shopErr').textContent = e; }
 
@@ -236,10 +383,12 @@ export class UI {
     const btn = $('spawnBase') as HTMLButtonElement;
     const left = Math.ceil((this.waitUntil - Date.now()) / 1000);
     if (left > 0) { btn.disabled = true; btn.textContent = `Renascer em ${left}s`; }
-    else { btn.disabled = false; btn.textContent = 'Entrar em campo (Base)'; }
+    else { btn.disabled = this.merchant && btn.dataset.bad === '1'; btn.textContent = this.merchant ? 'Confirmar compra' : 'Entrar em campo (Base)'; }
   }
 
   private toggle(it: Item) {
+    if (it.slot === 'tool' && ['revive','defib','mark'].includes(it.tool ?? '')) { for (const id of this.sel) if (['revive','defib','mark'].includes(ITEM_BY_ID[id].tool ?? '') && id !== it.id) this.sel.delete(id); }
+    if (it.slot === 'primary' || it.slot === 'secondary' || it.slot === 'pack' || it.slot === 'vest') {this.pendingMags.clear();}
     if (this.sel.has(it.id)) { this.sel.delete(it.id); }
     else {
       if (it.slot !== 'tool') {
@@ -275,7 +424,11 @@ export class UI {
       d.className = 'item' + (this.sel.has(it.id) ? ' sel' : '') + (locked ? ' locked' : '') + (sniperLock && !locked ? ' warn' : '');
       d.innerHTML = `${silhouette(it)}<div class="n"><span>${esc(it.name)}</span><em>${tag}</em></div>`
         + `<div class="d">${esc(it.desc)}${sniperLock && !locked ? ' <b>(exige arma de precisão)</b>' : ''}</div>${it.weapon ? `<div class="bars">${bars(it.weapon)}</div>` : ''}`;
-      if (!locked) d.onclick = () => this.toggle(it);
+      if(this.cat==='suppressor' && it.slot !== (ITEM_BY_ID[this.accessoryWeapon]?.slot==='secondary'?'secondarySuppressor':'suppressor')) continue;
+      if (!locked) d.onclick = () => {
+        if(it.weapon){ if(!this.sel.has(it.id))this.toggle(it);this.accessoryWeapon=it.id;this.section('accessories'); }
+        else this.toggle(it);
+      };
       grid.appendChild(d);
     }
     root.scrollTop = scroll;
@@ -287,27 +440,40 @@ export class UI {
     if (res.ok) {
       const lo = res.loadout;
       const pick = (slot: string) => [...this.sel].map((id) => ITEM_BY_ID[id]).find((i) => i.slot === slot);
-      rows.push({ label: 'Principal', item: pick('primary'), free: 'Fuzil básico (grátis)' });
-      rows.push({ label: 'Secundária', item: pick('secondary'), free: 'Pistola padrão (grátis)' });
-      rows.push({ label: 'Mira', item: lo.sight, free: 'Mira de ferro' });
-      rows.push({ label: 'Blindagem', item: lo.armor });
-      rows.push({ label: 'Capacete', item: lo.helmet });
-      rows.push({ label: 'Colete', item: lo.vest });
-      rows.push({ label: 'Mochila', item: lo.pack });
-      for (let k = 0; k < MAX_TOOLS; k++) rows.push({ label: k === 0 ? 'Ferramentas' : '', item: lo.tools[k] });
+      rows.push({ label: 'Principal', item: lo.primary });
+      rows.push({ label: 'Arma reserva', item: lo.secondary });
+      rows.push({ label: 'Especialista', item: lo.tools.find(t=>['revive','defib','mark'].includes(t.tool ?? '')) });
     }
     slots.innerHTML = rows.map((r) => {
       const body = r.item
-        ? `<span class="nm">${esc(r.item.name)}</span><span class="pr">${priceFor(r.item, lvl) === 0 ? 'grátis' : money(priceFor(r.item, lvl))}</span><button data-id="${r.item.id}" title="Remover">×</button>`
+        ? `${silhouette(r.item)}<span class="nm">${esc(r.item.name)}</span><span class="pr">${priceFor(r.item, lvl) === 0 ? 'grátis' : money(priceFor(r.item, lvl))}</span><button data-id="${r.item.id}" title="Remover">×</button>`
         : `<span class="nm empty">${r.free ? esc(r.free) : 'vazio'}</span>`;
-      return `<div class="slot"><label>${r.label}</label>${body}</div>`;
+      return `<div class="slot" data-equipment="${r.label}"><label>${r.label}</label>${body}<small>${r.label === 'Especialista' ? 'BINÓCULOS · DESFIBRILADOR' : 'MUNIÇÃO · ACESSÓRIOS'}</small></div>`;
     }).join('');
+    for(const [i,el] of Array.from(slots.children).entries()) (el as HTMLElement).onclick=(e)=>{if((e.target as HTMLElement).closest('button'))return;this.section(['weapons','secondary','specialist'][i]);};
     for (const b of Array.from(slots.querySelectorAll('button')) as HTMLButtonElement[]) b.onclick = () => { this.sel.delete(b.dataset.id!); this.renderShop(); };
     if (res.ok) {
       const lo = res.loadout;
       this.onPreview({ armor: lo.armor?.armor ?? 0, helmet: lo.helmet?.helmet ?? 0, pack: lo.pack?.pack ?? 0, gun: lo.primary.idx });
     }
-    const cost = res.ok ? res.loadout.cost : 0;
+    if(res.ok) {
+      const lo=res.loadout;
+      for(const [i] of this.pendingMags) if(i>=cargoCapacity(lo)){this.pendingMags.delete(i);}
+      $('shopPackName').textContent=lo.pack?.name ?? 'SEM MOCHILA';
+      $('shopCargo').innerHTML=this.cargoHtml(lo,true);
+      const focused=[lo.primary,lo.secondary].find(w=>w.id===this.accessoryWeapon)??lo.primary;
+      const weapons=$('shop').classList.contains('accessory-mode')?[focused]:[lo.primary,lo.secondary];
+      $('magazineShelf').innerHTML=weapons.map(w=>`<div class="ammo-product"><strong>${esc(w.name)}</strong><button draggable="true" data-mag="${w.id}" class="magazine">${magazineIcon()}<span>Carregador cheio · ${w.weapon!.mag} balas<br>${money(MAGAZINE_PRICE)}</span></button><small>Pronto para usar. Arraste para um espaço livre ou clique para adicionar.</small></div>`).join('');
+      for(const el of $('magazineShelf').querySelectorAll<HTMLElement>('[data-mag]')) {
+        const weapon=el.dataset.mag!;
+        el.ondragstart=e=>e.dataTransfer?.setData('text/plain','buy:'+weapon);
+        el.onclick=()=>{const i=Array.from({length:cargoCapacity(lo)},(_,i)=>i).find(i=>!this.cargo[i]&&!this.pendingMags.has(i));if(i!==undefined){this.pendingMags.set(i,weapon);this.renderShop();}else $('shopErr').textContent='Sem espaço livre para outro carregador.';};
+      }
+      this.bindCargo($('shopCargo'),true);
+      $('equipmentExtras').innerHTML=[lo.helmet,lo.armor,lo.vest,lo.pack,lo.sight,lo.suppressor,lo.secondarySuppressor,...lo.tools.filter(t=>!['revive','defib','mark'].includes(t.tool ?? ''))].filter(Boolean).map(i=>`<button data-remove="${i!.id}">${esc(i!.name)} ×</button>`).join('');
+      for(const b of $('equipmentExtras').querySelectorAll<HTMLElement>('[data-remove]')) b.onclick=()=>{this.sel.delete(b.dataset.remove!);this.pendingMags.clear();this.renderShop();};
+    }
+    const cost = res.ok ? loadoutIds(res.loadout).filter(id=>!this.owned.has(id)).reduce((n,id)=>n+priceFor(ITEM_BY_ID[id],lvl),0)+this.pendingMags.size*MAGAZINE_PRICE : 0;
     $('totalV').textContent = money(cost);
     const after = this.profile.cash - cost;
     $('afterV').textContent = money(after);
@@ -370,7 +536,7 @@ export class UI {
     this.center(`Minimapa ${['mundo', 'regional', 'próximo', 'detalhe'][this.mmZoomIdx]} (N)`, 900);
   }
 
-  minimap(px: number, pz: number, yaw: number, cz: Zone, hz: Zone, bases: { x: number; z: number }[], fobs: MapFob[], dots: MapDot[], myTeam: number) {
+  minimap(px: number, pz: number, yaw: number, cz: Zone, hz: Zone, bases: { x: number; z: number }[], fobs: MapFob[], dots: MapDot[], myTeam: number, vehicles?: VehicleState[]) {
     const c = this.mm, S = 240, H = S / 2;
     const sc = UI.MM_ZOOMS[this.mmZoomIdx];
     const cosY = Math.cos(yaw), sinY = Math.sin(yaw);
@@ -414,6 +580,16 @@ export class UI {
       c.fillStyle = d.kind === 1 ? '#ff3030' : d.kind === 2 ? '#ffe14d' : TEAM_CSS[d.team];
       c.strokeStyle = '#000'; c.lineWidth = 1;
       c.beginPath(); c.arc(x, y, d.kind === 1 ? 4 : 3.2, 0, 6.2832); c.fill(); c.stroke();
+    }
+    // veículos no minimapa
+    if (vehicles) {
+      for (const v of vehicles) {
+        const x = X(v.x, v.z), y = Y(v.x, v.z);
+        if ((x - H) ** 2 + (y - H) ** 2 > (H + 6) ** 2) continue;
+        c.fillStyle = v.driverId !== -1 ? '#f5c542' : '#ffffff';
+        c.strokeStyle = '#000'; c.lineWidth = 1;
+        c.beginPath(); c.rect(x - 3, y - 3, 6, 6); c.fill(); c.stroke();
+      }
     }
     // seta na borda apontando a Control Zone quando ela está fora do mapa visível
     const zx = X(cz.x, cz.z) - H, zy = Y(cz.x, cz.z) - H;

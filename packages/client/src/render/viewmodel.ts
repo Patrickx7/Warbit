@@ -80,6 +80,8 @@ export class ViewModel {
   private cls: WeaponClass | '' = '';
   private weaponId = '';
   private sightId = '';
+  private suppressed = false;
+  private silencer: THREE.Mesh | null = null;
   private kick = 0;
   private bob = 0;
   private ads = 0;
@@ -111,10 +113,10 @@ export class ViewModel {
   }
 
   /** troca de arma/mira; `sight` é o item de mira comprado (ou undefined = mira de ferro / luneta da própria arma) */
-  setWeapon(item: Item, sight?: Item) {
+  setWeapon(item: Item, sight?: Item, suppressed = false) {
     const cls = item.weapon!.cls;
     const sid = cls === 'pistol' ? '' : sight?.id ?? '';
-    if (item.id === this.weaponId && sid === this.sightId) return;
+    if (item.id === this.weaponId && sid === this.sightId && suppressed===this.suppressed) return;
     if (item.id !== this.weaponId) {
       this.weaponId = item.id;
       this.cls = cls;
@@ -132,7 +134,10 @@ export class ViewModel {
       this.gun = g;
       this.dip = 1;
     }
-    this.sightId = sid;
+    this.sightId = sid;this.suppressed=suppressed;
+    if(this.silencer){this.silencer.parent?.remove(this.silencer);this.silencer.geometry.dispose();(this.silencer.material as THREE.Material).dispose();this.silencer=null;}
+    if(suppressed){this.silencer=hollow(.023,.2,0x222526,0,0,this.model!.muzzleZ-.08);this.gun!.add(this.silencer);}
+
     const gm = this.model!;
     if (this.optic) { this.gun!.remove(this.optic); this.optic = null; }
     const optical = !!sight?.sight && cls !== 'pistol';

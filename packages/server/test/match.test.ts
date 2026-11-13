@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, START_CASH, World, BTN2_USE, TICK_RATE } from '@warbit/shared';
+import { LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, START_CASH, World, BTN2_USE, BTN_FWD, TICK_RATE, getVendorPos } from '@warbit/shared';
 import { ProfileStore } from '../src/db';
 import { Match } from '../src/game/Match';
 
@@ -64,6 +64,47 @@ describe('partida', () => {
     p.cash = 100;
     expect(m.spawn(p, ['fuzil_padrao'])).toBe('Saldo insuficiente');
     expect(m.spawn(p, [])).toBeNull(); // kit gratuito
+  });
+
+  it('compra quadriciclo no vendedor da base, pilota e desce', () => {
+    const m = new Match(world, null, { bots: false });
+    const c = conn();
+    const p = m.join(c, 'Piloto')!;
+    expect(m.spawn(p, [])).toBeNull();
+    expect(p.life).toBe(LIFE_ALIVE);
+
+    const initialCash = p.cash;
+    // Tenta comprar longe do vendedor
+    p.ms.x = 750; p.ms.z = 750;
+    m.onJson(p, { t: 'buyVehicle', vehicleType: 'quad' });
+    expect(m.vehicles.size).toBe(0);
+
+    // Posiciona perto do vendedor da base do time
+    const vPos = getVendorPos(p.team, world);
+    p.ms.x = vPos.x; p.ms.z = vPos.z;
+    m.onJson(p, { t: 'buyVehicle', vehicleType: 'quad' });
+    expect(m.vehicles.size).toBe(1);
+    expect(p.cash).toBe(initialCash - 1200);
+    expect(p.vehicleId).not.toBe(-1);
+
+    const veh = m.vehicles.get(p.vehicleId)!;
+    expect(veh).toBeDefined();
+    expect(veh.driverId).toBe(p.id);
+    expect(veh.type).toBe('quad');
+
+    // Pilota para frente por alguns ticks
+    const startX = veh.x, startZ = veh.z;
+    for (let i = 0; i < 30; i++) {
+      m.processInput(p, { seq: i + 1, buttons: BTN_FWD, buttons2: 0, buttons3: 0, yaw: veh.yaw, pitch: 0, renderTick: 0 });
+    }
+    expect(Math.hypot(veh.x - startX, veh.z - startZ)).toBeGreaterThan(2);
+    expect(p.ms.x).toBe(veh.x);
+    expect(p.ms.z).toBe(veh.z);
+
+    // Desce do veículo
+    m.onJson(p, { t: 'dismountVehicle' });
+    expect(p.vehicleId).toBe(-1);
+    expect(veh.driverId).toBe(-1);
   });
 
   it('roda 60 bots por 80 s de jogo sem erro e alguém pontua', () => {

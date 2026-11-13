@@ -1,3 +1,4 @@
+import { cargoCapacity, loadoutIds, getEquipmentVendorPos, MAGAZINE_PRICE, ITEM_BY_ID, priceFor } from '@warbit/shared';
 import {
   ALIVE_MASK_BYTES, ARMOR_REDUCTION, BASE_MAGS, BOT_START_CASH, BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD,
   BTN2_SECONDARY, BTN2_USE, BTN3_FOB, BTN_FIRE, BTN_SPRINT, BUILD_USES, BoxKind, CROUCH_HEIGHT, CZ_RADIUS, DEFIB_SECONDS,
@@ -6,6 +7,7 @@ import {
   NADE_DAMAGE, NADE_FUSE, NADE_RADIUS, NADE_SPEED, NEAR_DIST, PLAYER_HEIGHT, PLAYER_RADIUS, PRESENCE_REWARD_SECONDS, RESPAWN_SECONDS,
   REVIVE_RANGE, REVIVE_SECONDS, SCORE_TO_WIN, SNAPSHOT_EVERY, SPRINT_FLAG_SPEED, TEAM_COUNT, TEAM_NAMES, TICK_RATE, WARMUP_SECONDS,
   aimDir, buildLoadout, computePresence, encodeSnapshot, eyeHeight, maskSet, newMoveState, pointsFor, rewardFor, stepMove, stepNade, whereIs,
+  getVendorPos, getVehicleSpawnPos, newVehicle, stepVehicle, VEHICLE_BY_ID, type VehicleState,
   type Box, type BoxMsg, type ClientMsg, type EntityState, type InputMsg, type Nade, type RewardKind, type RosterEntry, type ServerMsg,
   type WeaponStats, type World, type Zone, type ZoneWhere,
 } from '@warbit/shared';
@@ -64,6 +66,9 @@ export class Match {
   nades: Nade[] = [];
   sandbags: number[] = [];
   fobs: (Fob | null)[] = [null, null, null];
+  readonly vehicles = new Map<number, VehicleState>();
+  private nextVehicleId = 1;
+  private vehicleSyncTick = 0;
   /** pontos de cobertura dentro da Control Zone (para os bots) */
   cover: { x: number; z: number }[] = [];
   private nextNade = 1;
@@ -87,6 +92,41 @@ export class Match {
   broadcast(m: ServerMsg) {
     const s = JSON.stringify(m);
     for (const p of this.players) if (p.conn) p.conn.send(s);
+  }
+  vehicleList(): VehicleState[] {
+    return Array.from(this.vehicles.values());
+  }
+  sendVehicles() {
+    this.broadcast({ t: 'vehicles', list: this.vehicleList() });
+  }
+  dismountPlayer(p: Player) {
+    if (p.vehicleId === -1) return;
+    const veh = this.vehicles.get(p.vehicleId);
+    if (veh && veh.driverId === p.id) {
+      veh.driverId = -1;
+      const sideX = veh.x + Math.cos(veh.yaw) * 1.5;
+      const sideZ = veh.z - Math.sin(veh.yaw) * 1.5;
+      const gy = this.world.groundAt(sideX, sideZ, veh.y + 0.2, PLAYER_RADIUS);
+      p.ms.x = sideX; p.ms.z = sideZ; p.ms.y = gy;
+      p.ms.vx = 0; p.ms.vz = 0;
+    }
+    p.vehicleId = -1;
+    this.sendVehicles();
+  }
+  destroyVehicle(id: number) {
+    const v = this.vehicles.get(id);
+    if (!v) return;
+    this.broadcast({ t: 'vehicleBoom', id: v.id, x: v.x, y: v.y, z: v.z });
+    this.broadcast({ t: 'boom', x: v.x, y: v.y, z: v.z });
+    if (v.driverId !== -1) {
+      const driver = this.players[v.driverId];
+      if (driver && driver.life === LIFE_ALIVE) {
+        driver.vehicleId = -1;
+        this.damage(driver, 80, null, 'Explosão do veículo', false);
+      }
+    }
+    this.vehicles.delete(id);
+    this.sendVehicles();
   }
   whereOf(p: Player): ZoneWhere {
     return p.life === LIFE_NONE ? 'out' : whereIs(p.ms.x, p.ms.z, this.cz, this.hz);
@@ -121,6 +161,8 @@ export class Match {
     this.phase = 'warmup';
     this.phaseEnd = this.tick + WARMUP_SECONDS * TICK_RATE;
     this.nades.length = 0;
+    this.vehicles.clear();
+    this.broadcast({ t: 'vehicles', list: [] });
     const remove: number[] = [...this.sandbags];
     for (let t = 0; t < 3; t++) { const f = this.fobs[t]; if (f) remove.push(...f.ids); this.fobs[t] = null; }
     if (remove.length) {
@@ -136,7 +178,7 @@ export class Match {
         p.life = LIFE_NONE; p.loadout = null; p.lifeProfit = 0;
         this.sendTo(p, { t: 'life', life: LIFE_NONE, reason: 'Nova partida', wait: 0 });
       }
-      p.points = 0; p.presenceAcc = 0; p.markedUntil = 0; p.respawnAt = 0;
+      p.points = 0; p.presenceAcc = 0; p.markedUntil = 0; p.respawnAt = 0; p.vehicleId = -1;
       if (p.bot) { p.deaths = 0; p.kills = 0; p.respawnAt = this.tick + 30 + Math.floor(this.rnd() * 240); }
     }
     this.broadcast({ t: 'msg', text: `Control Zone: ${w.pois[k]?.name ?? ''}` });
@@ -187,13 +229,15 @@ export class Match {
   }
 
   // ---------- conexões ----------
-  join(conn: Conn, name: string, token?: string): Player | null {
+  join(conn: Conn, name: string, token?: string, preferredTeam?: number): Player | null {
     const humans = [0, 0, 0];
     for (const p of this.players) if (!p.bot) humans[p.team]++;
     let team = 0;
     for (let t = 1; t < TEAM_COUNT; t++) if (humans[t] < humans[team] || (humans[t] === humans[team] && this.scores[t] < this.scores[team])) team = t;
+    const chosen=Number.isInteger(preferredTeam) && preferredTeam!>=0 && preferredTeam!<TEAM_COUNT;
+    if(chosen) team=preferredTeam!;
     let slot: Player | undefined;
-    for (let pass = 0; pass < 2 && !slot; pass++) {
+    for (let pass = 0; pass < (chosen ? 1 : 2) && !slot; pass++) {
       for (const p of this.players) {
         if (!p.bot) continue;
         if (pass === 0 && p.team !== team) continue;
@@ -215,11 +259,13 @@ export class Match {
     this.sendTo(p, { t: 'welcome', id: p.id, team: p.team, seed: this.world.seed, token: profile.token, tick: this.tick, roster: this.roster(), builds });
     this.sendProfile(p);
     this.sendTo(p, this.stateMsg());
+    this.sendTo(p, { t: 'vehicles', list: this.vehicleList() });
     this.broadcast({ t: 'roster', roster: this.roster() });
     return p;
   }
 
   leave(p: Player) {
+    this.dismountPlayer(p);
     this.persist(p);
     this.resetAsBot(p);
     this.broadcast({ t: 'roster', roster: this.roster() });
@@ -241,15 +287,88 @@ export class Match {
     switch (m.t) {
       case 'spawn': {
         if (!Array.isArray(m.items) || m.items.length > 12) return;
-        const err = this.spawn(p, m.items.map(String));
+        const err = this.spawn(p, []);
         if (err) this.sendTo(p, { t: 'shopError', error: err });
         break;
+      }
+      case 'inventory': this.sendInventory(p); break;
+      case 'buyEquipment': {
+        const error = this.buyEquipment(p, m.items, m.magazines);
+        if (error) this.sendTo(p, {t:'shopError',error});
+        break;
+      }
+      case 'discardMagazine': {
+        if(p.life!==LIFE_ALIVE||p.reloadEnd>0||!Number.isInteger(m.slot)||m.slot<0||m.slot>=p.cargo.length)return;
+        p.cargo[m.slot]=null;this.syncReserve(p);this.sendInventory(p);break;
+      }
+      case 'moveMagazine': {
+        if (p.life !== LIFE_ALIVE || p.reloadEnd > 0 || !Number.isInteger(m.from) || !Number.isInteger(m.to)) return;
+        if (m.from < 0 || m.to < 0 || m.from >= p.cargo.length || m.to >= p.cargo.length) return;
+        [p.cargo[m.from],p.cargo[m.to]]=[p.cargo[m.to],p.cargo[m.from]];
+        this.sendInventory(p); break;
       }
       case 'giveup':
         if (p.life === LIFE_DOWNED) this.die(p, 'Você desistiu');
         break;
       case 'board':
         this.sendTo(p, { t: 'board', rows: this.players.filter((q) => this.active(q)).map((q) => ({ id: q.id, kills: q.kills, deaths: q.deaths, score: Math.round(q.points) })) });
+        break;
+      case 'buyVehicle': {
+        if (p.life !== LIFE_ALIVE) return;
+        const vType = typeof m.vehicleType === 'string' ? m.vehicleType : 'quad';
+        const def = VEHICLE_BY_ID[vType];
+        if (!def || def.soon) {
+          this.sendTo(p, { t: 'msg', text: 'Veículo indisponível no momento' });
+          return;
+        }
+        const vPos = getVendorPos(p.team, this.world);
+        const distToVendor = Math.hypot(p.ms.x - vPos.x, p.ms.z - vPos.z);
+        if (distToVendor > 25) {
+          this.sendTo(p, { t: 'msg', text: 'Vá até o vendedor de veículos da base para comprar!' });
+          return;
+        }
+        if (p.cash < def.price) {
+          this.sendTo(p, { t: 'msg', text: `Saldo insuficiente! Custa $${def.price.toLocaleString('pt-BR')}` });
+          return;
+        }
+        this.dismountPlayer(p);
+        p.cash -= def.price;
+        this.sendTo(p,{t:'purchase',amount:def.price});
+        p.profileDirty = true; p.saveDirty = true;
+        this.sendProfile(p);
+
+        const spawnPos = getVehicleSpawnPos(p.team, this.world);
+        const vid = this.nextVehicleId++;
+        const veh = newVehicle(vid, vType, spawnPos.x, spawnPos.y, spawnPos.z, spawnPos.yaw, p.team);
+        veh.driverId = p.id;
+        p.vehicleId = vid;
+        p.ms.x = veh.x; p.ms.y = veh.y; p.ms.z = veh.z;
+        p.yaw = veh.yaw;
+        p.ms.vx = 0; p.ms.vy = 0; p.ms.vz = 0;
+
+        this.vehicles.set(vid, veh);
+        this.sendVehicles();
+        this.sendTo(p, { t: 'msg', text: `${def.name} pronto! Use [WASD] para pilotar e [E] para descer.` });
+        break;
+      }
+      case 'mountVehicle': {
+        if (p.life !== LIFE_ALIVE || p.vehicleId !== -1) return;
+        const vid = Number(m.vehicleId);
+        const veh = this.vehicles.get(vid);
+        if (!veh || veh.driverId !== -1) return;
+        const d = Math.hypot(p.ms.x - veh.x, p.ms.z - veh.z, p.ms.y - veh.y);
+        if (d > 3.5) return;
+        veh.driverId = p.id;
+        p.vehicleId = veh.id;
+        p.ms.x = veh.x; p.ms.y = veh.y; p.ms.z = veh.z;
+        p.yaw = veh.yaw;
+        p.ms.vx = 0; p.ms.vy = 0; p.ms.vz = 0;
+        this.sendVehicles();
+        this.sendTo(p, { t: 'msg', text: `Você montou no ${VEHICLE_BY_ID[veh.type]?.name ?? 'veículo'}. [E] para descer.` });
+        break;
+      }
+      case 'dismountVehicle':
+        this.dismountPlayer(p);
         break;
       case 'ping':
         this.sendTo(p, { t: 'pong', c: Number(m.c) || 0 });
@@ -274,10 +393,11 @@ export class Match {
     p.loadout = lo;
     p.lifeProfit = 0;
     p.profileDirty = true; p.saveDirty = true;
-    const mags = BASE_MAGS + (lo.vest?.mags ?? 0) + (lo.pack?.mags ?? 0);
+    const mags = p.bot ? BASE_MAGS : 0;
+    p.cargo = Array(cargoCapacity(lo)).fill(null);
     const pw = lo.primary.weapon!, sw = lo.secondary.weapon!;
     p.ammo = [pw.mag, sw.mag];
-    p.reserve = [pw.mag * mags, sw.mag * 3];
+    p.reserve = [pw.mag * mags, sw.mag * (p.bot ? 3 : 0)];
     p.maxReserve = [p.reserve[0], p.reserve[1]];
     p.slot = 0; p.reloadEnd = 0; p.nextFire = 0; p.simTime = 0;
     p.frags = lo.tools.some((t) => t.tool === 'frag') ? FRAG_COUNT : 0;
@@ -308,9 +428,56 @@ export class Match {
     p.lastAttacker = -1;
     p.markedUntil = 0;
     p.presenceAcc = 0;
+    p.vehicleId = -1;
     p.inputs.length = 0;
     p.prevB = 0; p.prevB2 = 0;
+    this.sendInventory(p);
     this.sendTo(p, { t: 'life', life: LIFE_ALIVE, tools: this.toolsMsg(p) });
+    return null;
+  }
+
+  private syncReserve(p: Player) {
+    if (!p.loadout) return;
+    p.reserve = [p.loadout.primary,p.loadout.secondary].map(w=>p.cargo.reduce((n,m)=>n+(m?.weapon===w.id?m.rounds:0),0));
+    p.maxReserve = [...p.reserve];
+  }
+  private sendInventory(p: Player, purchased = false) {
+    if (p.loadout) this.sendTo(p,{t:'inventory',items:loadoutIds(p.loadout),cargo:p.cargo,ammo:p.ammo,purchased});
+  }
+  buyEquipment(p: Player, items: string[], magazines: {slot:number;weapon:string}[]): string | null {
+    const v=getEquipmentVendorPos(p.team,this.world);
+    if(p.life!==LIFE_ALIVE || p.vehicleId!==-1 || Math.hypot(p.ms.x-v.x,p.ms.y-v.y,p.ms.z-v.z)>3.8) return 'Aproxime-se do comerciante de equipamento';
+    if(!Array.isArray(items)||items.length>16||!Array.isArray(magazines)||magazines.length>16) return 'Compra inválida';
+    const res=buildLoadout(items,p.level,Infinity);
+    if(!res.ok) return res.error;
+    const lo=res.loadout, old=p.loadout!;
+    const specialist=lo.tools.filter(i=>['revive','defib','mark'].includes(i.tool ?? ''));
+    if(specialist.length>1) return 'Escolha somente um especialista';
+    const owned=new Set(loadoutIds(old));
+    let cost=loadoutIds(lo).filter(id=>!owned.has(id)).reduce((n,id)=>n+priceFor(ITEM_BY_ID[id],p.level),0);
+    const cap=cargoCapacity(lo);
+    if(p.cargo.slice(cap).some(Boolean)) return 'Esvazie os espaços excedentes antes de trocar a mochila';
+    const cargo=Array.from({length:cap},(_,i)=>p.cargo[i] ? {...p.cargo[i]!} : null);
+    for(const m of magazines){
+      if(!m || !Number.isInteger(m.slot)||m.slot<0||m.slot>=cap||cargo[m.slot]) return 'Espaço de carregador inválido ou ocupado';
+      const w=ITEM_BY_ID[m.weapon];
+      if(!w?.weapon||![lo.primary.id,lo.secondary.id].includes(w.id)) return 'Carregador incompatível';
+      cargo[m.slot]={weapon:w.id,rounds:w.weapon.mag}; cost+=MAGAZINE_PRICE;
+    }
+    if(cost>p.cash) return 'Saldo insuficiente';
+    p.cash-=cost; p.profileDirty=true;p.saveDirty=true;
+    if(old.primary.id!==lo.primary.id) p.ammo[0]=lo.primary.weapon!.mag;
+    if(old.secondary.id!==lo.secondary.id) p.ammo[1]=lo.secondary.weapon!.mag;
+    p.loadout=lo;p.cargo=cargo;p.reloadEnd=0;
+    const has=(kind:string)=>lo.tools.some(t=>t.tool===kind);
+    const added=(kind:string)=>has(kind)&&!old.tools.some(t=>t.tool===kind);
+    if(added('frag')) p.frags=FRAG_COUNT;
+    if(added('medbag')) p.medbags=MEDBAG_USES;
+    if(added('build')) p.builds=BUILD_USES;
+    p.hasRevive=has('revive');p.hasDefib=has('defib');p.hasMark=has('mark');p.hasFob=has('fob');
+    this.syncReserve(p);this.sendProfile(p);this.sendInventory(p,true);
+    if(cost>0)this.sendTo(p,{t:'purchase',amount:cost});
+    this.sendTo(p,{t:'life',life:LIFE_ALIVE,tools:this.toolsMsg(p)});
     return null;
   }
 
@@ -355,6 +522,17 @@ export class Match {
       }
     }
 
+    for (const v of this.vehicles.values()) {
+      if (v.driverId === -1 && Math.abs(v.speed) > 0.05) {
+        v.speed *= Math.max(0, 1 - 6 * DT);
+        if (Math.abs(v.speed) < 0.05) v.speed = 0;
+        stepVehicle(v, 0, DT, this.world);
+      }
+    }
+    if (++this.vehicleSyncTick % 6 === 0 && this.vehicles.size > 0) {
+      this.sendVehicles();
+    }
+
     const hi = tick % HIST;
     for (const p of this.players) {
       p.hx[hi] = p.ms.x; p.hy[hi] = p.ms.y; p.hz[hi] = p.ms.z;
@@ -381,7 +559,7 @@ export class Match {
       for (const p of alive) {
         if (p.team !== f.team || (p.ms.x - f.x) ** 2 + (p.ms.z - f.z) ** 2 > FOB_RADIUS * FOB_RADIUS) continue;
         if (p.hp < MAX_HP) p.hp = Math.min(MAX_HP, p.hp + 4);
-        if (tick % (TICK_RATE * 6) === 0 && (p.reserve[0] < p.maxReserve[0] || p.reserve[1] < p.maxReserve[1])) {
+        if (p.bot && tick % (TICK_RATE * 6) === 0 && (p.reserve[0] < p.maxReserve[0] || p.reserve[1] < p.maxReserve[1])) {
           p.reserve[0] = p.maxReserve[0]; p.reserve[1] = p.maxReserve[1];
           const owner = this.players[f.owner];
           if (owner && owner !== p && owner.team === f.team && owner.life !== LIFE_NONE) this.award(owner, 'resupply');
@@ -426,12 +604,30 @@ export class Match {
   processInput(p: Player, inp: InputMsg) {
     p.yaw = inp.yaw; p.pitch = inp.pitch; p.renderTick = inp.renderTick; p.ack = inp.seq;
     if (p.life === LIFE_ALIVE && p.loadout) {
-      const armor = p.loadout.armor?.armor ?? 0;
-      stepMove(p.ms, inp.buttons, inp.yaw, this.world, DT, armor >= 4 ? 0.92 : armor === 3 ? 0.96 : 1, inp.buttons3);
-      p.sprinting = (inp.buttons & BTN_SPRINT) !== 0 && !p.ms.prone && !p.ms.crouch && Math.hypot(p.ms.vx, p.ms.vz) > SPRINT_FLAG_SPEED;
-      p.simTime += DT;
-      this.weapons(p, inp);
-      this.tools(p, inp);
+      if (p.vehicleId !== -1) {
+        const veh = this.vehicles.get(p.vehicleId);
+        if (veh && veh.driverId === p.id) {
+          stepVehicle(veh, inp.buttons, DT, this.world);
+          p.ms.x = veh.x; p.ms.y = veh.y; p.ms.z = veh.z;
+          p.yaw = veh.yaw;
+          p.ms.vx = -Math.sin(veh.yaw) * veh.speed;
+          p.ms.vz = -Math.cos(veh.yaw) * veh.speed;
+          p.sprinting = false;
+          p.simTime += DT;
+          if ((inp.buttons2 & BTN2_USE) && !(p.prevB2 & BTN2_USE)) {
+            this.dismountPlayer(p);
+          }
+        } else {
+          p.vehicleId = -1;
+        }
+      } else {
+        const armor = p.loadout.armor?.armor ?? 0;
+        stepMove(p.ms, inp.buttons, inp.yaw, this.world, DT, armor >= 4 ? 0.92 : armor === 3 ? 0.96 : 1, inp.buttons3);
+        p.sprinting = (inp.buttons & BTN_SPRINT) !== 0 && !p.ms.prone && !p.ms.crouch && Math.hypot(p.ms.vx, p.ms.vz) > SPRINT_FLAG_SPEED;
+        p.simTime += DT;
+        this.weapons(p, inp);
+        this.tools(p, inp);
+      }
     }
     p.prevB = inp.buttons; p.prevB2 = inp.buttons2;
   }
@@ -443,8 +639,19 @@ export class Match {
     const w = (slot === 0 ? lo.primary : lo.secondary).weapon!;
     if (p.reloadEnd > 0) {
       if (p.simTime < p.reloadEnd) return;
-      const take = Math.min(w.mag - p.ammo[slot], p.reserve[slot]);
-      p.ammo[slot] += take; p.reserve[slot] -= take; p.reloadEnd = 0;
+      if (p.bot) {
+        const take = Math.min(w.mag - p.ammo[slot], p.reserve[slot]);
+        p.ammo[slot] += take; p.reserve[slot] -= take;
+      } else {
+        const weapon = slot === 0 ? lo.primary.id : lo.secondary.id;
+        const index = p.cargo.findIndex(m => m?.weapon === weapon && m.rounds > 0);
+        if (index >= 0) {
+          const old = p.ammo[slot]; p.ammo[slot] = p.cargo[index]!.rounds;
+          p.cargo[index] = old > 0 ? {weapon,rounds:old} : null;
+          this.syncReserve(p); this.sendInventory(p);
+        }
+      }
+      p.reloadEnd = 0;
     }
     const wantReload = (inp.buttons2 & BTN2_RELOAD) !== 0 && !(p.prevB2 & BTN2_RELOAD);
     if (p.reserve[slot] > 0 && ((wantReload && p.ammo[slot] < w.mag) || p.ammo[slot] === 0)) {
@@ -521,7 +728,30 @@ export class Match {
         if (th >= 0 && th < best && (tb < 0 || th <= tb + 0.35)) { best = th; hit = e; head = true; }
         else if (tb >= 0 && tb < best) { best = tb; hit = e; head = false; }
       }
-      if (hit) {
+      let hitVeh: VehicleState | null = null;
+      for (const v of this.vehicles.values()) {
+        const dveh = rayCylinder(ox, oy, oz, dx, dy, dz, v.x, v.z, v.y, v.y + 1.2, 1.1);
+        if (dveh >= 0 && dveh < best) {
+          best = dveh;
+          hit = null;
+          hitVeh = v;
+        }
+      }
+      if (hitVeh) {
+        let dmg = w.dmg;
+        if (best > w.falloffStart) {
+          const f = Math.min(1, (best - w.falloffStart) / Math.max(1, w.falloffEnd - w.falloffStart));
+          dmg *= 1 - f * (1 - w.minDmgMul);
+        }
+        hitVeh.hp -= dmg;
+        totalDmg += dmg;
+        if (hitVeh.hp <= 0) {
+          this.destroyVehicle(hitVeh.id);
+          anyKill = true;
+        } else {
+          this.sendVehicles();
+        }
+      } else if (hit) {
         let dmg = w.dmg;
         if (best > w.falloffStart) {
           const f = Math.min(1, (best - w.falloffStart) / Math.max(1, w.falloffEnd - w.falloffStart));
@@ -550,6 +780,7 @@ export class Match {
   }
 
   private goDown(victim: Player, attacker: Player | null, weaponName: string, head: boolean) {
+    this.dismountPlayer(victim);
     victim.life = LIFE_DOWNED;
     victim.hp = 30;
     victim.downUntil = this.tick + DOWNED_SECONDS * TICK_RATE;
@@ -578,6 +809,7 @@ export class Match {
 
   die(p: Player, reason: string) {
     if (p.life === LIFE_NONE) return;
+    this.dismountPlayer(p);
     p.life = LIFE_NONE;
     p.hp = 0;
     p.deaths++;
@@ -755,6 +987,14 @@ export class Match {
       if (f.hp <= 0) this.destroyFob(f.team, owner);
       else this.sendState();
     }
+    for (const v of this.vehicles.values()) {
+      const d = Math.hypot(v.x - n.x, v.y + 0.6 - n.y, v.z - n.z);
+      if (d <= NADE_RADIUS + 1.2) {
+        v.hp -= NADE_DAMAGE * (1 - d / (NADE_RADIUS + 1.2)) * 1.5;
+        if (v.hp <= 0) this.destroyVehicle(v.id);
+        else this.sendVehicles();
+      }
+    }
   }
 
   // ---------- snapshots ----------
@@ -768,7 +1008,7 @@ export class Match {
       const lo = p.loadout;
       this.ents[p.id] = {
         id: p.id, x: p.ms.x, y: p.ms.y, z: p.ms.z, yaw: p.yaw, pitch: p.pitch, life: p.life, crouch: p.ms.crouch, prone: p.ms.prone, sprint: p.sprinting,
-        marked: false, team: p.team, armor: lo?.armor?.armor ?? 0, helmet: lo?.helmet?.helmet ?? 0, pack: lo?.pack?.pack ?? 0,
+        suppressed: !!(p.slot===0 ? lo?.suppressor : lo?.secondarySuppressor), marked: false, team: p.team, armor: lo?.armor?.armor ?? 0, helmet: lo?.helmet?.helmet ?? 0, pack: lo?.pack?.pack ?? 0,
         weapon: lo ? (p.slot === 0 ? lo.primary.idx : lo.secondary.idx) : 0, shot: p.shot, hp: p.hp,
       };
     }

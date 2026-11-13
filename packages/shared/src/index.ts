@@ -7,3 +7,6 @@ export * from './rewards';
 export * from './scoring';
 export * from './protocol';
 export * from './nade';
+export * from './vehicles';
+
+export * from './inventory';

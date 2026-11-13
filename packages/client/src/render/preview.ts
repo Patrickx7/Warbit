@@ -44,7 +44,7 @@ export class SoldierPreview {
     }
     // gira devagar e para um instante de costas, para mostrar a mochila
     const t = now / 1000;
-    this.pose.yaw = Math.PI + Math.sin(t * 0.6) * 1.9;
+    this.pose.yaw = Math.PI + Math.sin(t * 0.4) * 0.08;
     this.soldiers.begin();
     this.soldiers.add(this.pose, 0);
     this.soldiers.end();
