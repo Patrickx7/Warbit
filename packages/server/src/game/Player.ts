@@ -65,6 +65,7 @@ export class Player {
   downUntil = 0;
   reviveProg = 0;
   reviveTick = 0;
+  lootRevision = 0;
   markedUntil = 0;
   markedTeam = -1;
   markedBy = -1;

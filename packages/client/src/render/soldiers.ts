@@ -186,12 +186,15 @@ export interface SoldierPose {
   marker: number; // 0 nenhum, 1 aliado, 2 inimigo marcado
   camo: number;   // 0..1: dentro de uma moita
   dist: number;
+  /** 0 a pé, 1 pilotando, 2 na garupa: (x,y,z) passa a ser o chão do veículo e seatYaw/Pitch/Roll a rotação dele */
+  seat?: number; seatYaw?: number; seatPitch?: number; seatRoll?: number;
 }
 
 const HIP_Y = 0.87;
 const m0 = new THREE.Matrix4(), root = new THREE.Matrix4(), hips = new THREE.Matrix4(), torso = new THREE.Matrix4(), head = new THREE.Matrix4();
 const a1 = new THREE.Matrix4(), a2 = new THREE.Matrix4(), tmp = new THREE.Matrix4(), sc = new THREE.Matrix4();
 const eul = new THREE.Euler();
+const seatEul = new THREE.Euler(0, 0, 0, 'YXZ'); // separado: `eul` é compartilhado e precisa continuar em XYZ
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const col = new THREE.Color();
 const jac = new THREE.Color(), pan = new THREE.Color();
@@ -289,12 +292,13 @@ export class Soldiers {
     const inst = dt > 0 ? Math.hypot(p.x - this.px[id], p.z - this.pz[id]) / dt : 0;
     this.px[id] = p.x; this.pz[id] = p.z;
     this.speed[id] += (Math.min(inst, 10) - this.speed[id]) * Math.min(1, dt * 10);
-    const v = p.downed ? 0 : this.speed[id];
+    const seat = p.seat ?? 0;
+    const v = p.downed || seat ? 0 : this.speed[id];
     const far = p.dist > 160;
     // passada: comprimento cresce com a velocidade (sem "patinar")
     const stride = p.sprint ? 2.3 : 1.5;
     this.phase[id] += (v * dt * Math.PI * 2) / stride;
-    const cTarget = p.crouch && !p.prone ? 1 : 0;
+    const cTarget = p.crouch && !p.prone && !seat ? 1 : 0;
     this.crouchAmt[id] += (cTarget - this.crouchAmt[id]) * Math.min(1, dt * 12);
     const c = this.crouchAmt[id];
     const ph = this.phase[id];
@@ -311,16 +315,25 @@ export class Soldiers {
     jac.setRGB(jac.r * (1 - cm) + 0.24 * cm, jac.g * (1 - cm) + 0.4 * cm, jac.b * (1 - cm) + 0.18 * cm);
     pan.setRGB(pan.r * (1 - cm) + 0.24 * cm, pan.g * (1 - cm) + 0.4 * cm, pan.b * (1 - cm) + 0.18 * cm);
 
-    root.copy(local(p.x, p.y, p.z, 0, p.yaw, 0));
-    if (p.downed) root.multiply(local(0, 0.16, -0.75, Math.PI / 2 - 0.06, 0, 0));
+    // montado: o corpo segue o quadriciclo (inclusive a inclinação do terreno)
+    const sYaw = p.seatYaw ?? p.yaw;
+    if (seat) root.makeRotationFromEuler(seatEul.set(p.seatPitch ?? 0, sYaw, p.seatRoll ?? 0, 'YXZ')).setPosition(p.x, p.y, p.z);
+    else root.copy(local(p.x, p.y, p.z, 0, p.yaw, 0));
+    if (seat) { /* sem ajuste de postura */ }
+    else if (p.downed) root.multiply(local(0, 0.16, -0.75, Math.PI / 2 - 0.06, 0, 0));
     else if (p.prone) root.multiply(local(0, 0.14, 0.55, -Math.PI / 2 + 0.05, 0, 0)); // de bruços, cabeça para frente
     const bounce = Math.abs(Math.sin(ph)) * (p.sprint ? 0.05 : 0.025) * amp;
-    const hipY = p.prone ? HIP_Y : HIP_Y - 0.41 * c + bounce;
-    hips.multiplyMatrices(root, local(0, hipY, 0, 0, sw * 0.12, 0));
+    const hipY = seat === 1 ? 0.88 : seat === 2 ? 0.9 : p.prone ? HIP_Y : HIP_Y - 0.41 * c + bounce;
+    // piloto no meio do banco (entre os para-lamas, para as pernas descerem até os estribos); garupa atrás, no fim do banco
+    hips.multiplyMatrices(root, local(0, hipY, seat === 2 ? 0.55 : seat === 1 ? 0.1 : 0, 0, sw * 0.12, 0));
     const pitch = p.downed ? 0 : p.pitch;
-    const lean = p.downed || p.prone ? 0 : 0.05 + (p.sprint ? 0.24 : 0.04) * amp + c * 0.3;
+    const lean = seat === 1 ? 0.3 : seat === 2 ? 0.06 : p.downed || p.prone ? 0 : 0.05 + (p.sprint ? 0.24 : 0.04) * amp + c * 0.3;
+    // garupa: o tronco gira para onde ele olha (até ~75°), o quadril fica no banco
+    let twist = -sw * 0.22;
+    if (seat === 2) { let d = (p.yaw - sYaw) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; else if (d < -Math.PI) d += Math.PI * 2; twist = Math.max(-1.3, Math.min(1.3, d)); }
+    else if (seat === 1) twist = 0;
     // tronco gira contra o quadril ao andar (contra-rotação natural)
-    torso.multiplyMatrices(hips, local(0, 0.06, 0, -lean + pitch * 0.35, -sw * 0.22, 0));
+    torso.multiplyMatrices(hips, local(0, 0.06, 0, -lean + (seat === 1 ? 0 : pitch * 0.35), twist, 0));
     head.multiplyMatrices(torso, local(0, 0.62, 0, pitch * 0.45 + lean * 0.6, sw * 0.12, 0));
 
     this.hipsM.setMatrixAt(i, hips); this.hipsM.setColorAt(i, pan);
@@ -351,11 +364,12 @@ export class Soldiers {
 
     // braços
     const aim = pitch * 0.6;
-    const relaxed = p.downed || (p.sprint && amp > 0.5);
+    const relaxed = p.downed || seat === 1 || (p.sprint && amp > 0.5);
     for (let side = 0; side < 2; side++) {
       const sx = side === 0 ? 0.25 : -0.25;
       let rx: number, rz: number, bend: number;
       if (p.downed) { rx = 0.2; rz = side === 0 ? -0.5 : 0.5; bend = 0.3; }
+      else if (seat === 1) { rx = 0.4; rz = side === 0 ? -0.18 : 0.18; bend = 0.75; } // mãos nas manoplas (0,98 m de altura, 25 cm à frente)
       else if (p.prone) { rx = Math.PI - 0.5 + (side === 0 ? 0.25 : -0.1) + (side === 0 ? -sw : sw) * 0.3; rz = side === 0 ? -0.15 : 0.35; bend = -0.5; }
       else if (relaxed) { rx = 0.55 + (side === 0 ? -sw : sw) * 0.35; rz = side === 0 ? -0.15 : 0.25; bend = 1.5; } // arma atravessada no peito, correndo
       else if (side === 0) { rx = 0.75 + aim; rz = -0.1; bend = 1.15; }
@@ -372,6 +386,16 @@ export class Soldiers {
     for (let side = 0; side < 2; side++) {
       const s = side === 0 ? 1 : -1;
       let th: number, knee: number;
+      if (seat) {
+        // sentado: a coxa sai para a frente e para fora (gira no eixo vertical e depois levanta), a canela desce até o estribo
+        a1.multiplyMatrices(hips, local(s * 0.1, -0.04, 0, 0, -s * (seat === 1 ? 1.0 : 0.6), 0));
+        a1.multiply(local(0, 0, 0, seat === 1 ? 0.95 : 1.25, 0, 0));
+        const k = i * 2 + side;
+        this.thighM.setMatrixAt(k, a1); this.thighM.setColorAt(k, pan);
+        a2.multiplyMatrices(a1, local(0, -0.4, 0, seat === 1 ? -1.05 : -1.35, 0, 0));
+        this.shinM.setMatrixAt(k, a2); this.shinM.setColorAt(k, pan);
+        continue;
+      }
       if (p.downed) { th = side === 0 ? 0.25 : -0.05; knee = side === 0 ? -0.5 : -0.1; }
       else if (p.prone) { th = s * 0.12 + s * sw * 0.2; knee = side === 0 ? -0.15 - Math.max(0, sw) * 0.5 : -0.1 - Math.max(0, -sw) * 0.5; }
       else {
@@ -400,7 +424,7 @@ export class Soldiers {
 
     if (p.marker) {
       const mi = this.markN++;
-      this.markerM.setMatrixAt(mi, local(p.x, p.y + (p.downed || p.prone ? 0.9 : 2.12 - 0.4 * c), p.z, 0, performance.now() / 600, 0));
+      this.markerM.setMatrixAt(mi, local(p.x, p.y + (seat ? 2.05 : p.downed || p.prone ? 0.9 : 2.12 - 0.4 * c), p.z, 0, performance.now() / 600, 0));
       this.markerM.setColorAt(mi, p.marker === 2 ? col.setHex(0xff3030) : p.downed ? col.setHex(0xffe14d) : col.setHex(look.band));
     }
   }

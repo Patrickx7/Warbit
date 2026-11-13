@@ -178,11 +178,12 @@ export function maskSet(mask: Uint8Array, id: number): void {
 export interface RosterEntry { id: number; name: string; team: number; bot: boolean; level: number }
 export interface ZoneMsg { x: number; z: number; r: number }
 export interface BoxMsg { id: number; x0: number; y0: number; z0: number; x1: number; y1: number; z1: number; kind: number; color: number }
+export interface LootView { target: number; revision: number; name: string; weapons: string[]; ammo: number[]; magazines: Magazine[] }
 
 export type ServerMsg =
   | { t: 'welcome'; id: number; team: number; seed: number; token: string; tick: number; roster: RosterEntry[]; builds: BoxMsg[] }
   | { t: 'roster'; roster: RosterEntry[] }
-  | { t: 'state'; phase: 'warmup' | 'live' | 'end'; timeLeft: number; scores: number[]; presence: number[]; control: number; cz: ZoneMsg; hz: ZoneMsg; hzIn: number; fobs: { team: number; x: number; z: number; hp: number }[]; winner: number; counts: number[] }
+  | { t: 'state'; phase: 'warmup' | 'live' | 'end'; timeLeft: number; scores: number[]; presence: number[]; control: number; cz: ZoneMsg; hz: ZoneMsg; hzIn: number; fobs: { team: number; x: number; z: number; hp: number }[]; winner: number; counts: number[]; drops: { id: number; x: number; y: number; z: number }[] }
   | { t: 'profile'; cash: number; xp: number; level: number; lifeProfit: number; kills: number; deaths: number }
   | { t: 'reward'; kind: RewardKind; label: string; cash: number; xp: number }
   | { t: 'kill'; killer: number; victim: number; weapon: string; head: boolean; downed: boolean }
@@ -199,6 +200,7 @@ export type ServerMsg =
   | { t: 'pong'; c: number }
   | { t: 'vehicles'; list: VehicleState[] }
   | { t: 'inventory'; items: string[]; cargo: (Magazine | null)[]; ammo: number[]; purchased?: boolean }
+  | { t: 'lootView'; body: LootView | null }
   | { t: 'vehicleBoom'; id: number; x: number; y: number; z: number };
 
 export type ClientMsg =
@@ -209,6 +211,9 @@ export type ClientMsg =
   | { t: 'moveMagazine'; from: number; to: number }
   | { t: 'inventory' }
   | { t: 'giveup' }
+  | { t: 'loot' }
+  | { t: 'inspectLoot' }
+  | { t: 'swapLootWeapon'; target: number; revision: number; slot: number }
   | { t: 'board' }
   | { t: 'ping'; c: number }
   | { t: 'buyVehicle'; vehicleType: string }

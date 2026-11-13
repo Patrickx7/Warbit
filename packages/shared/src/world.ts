@@ -117,12 +117,13 @@ export class World {
       const a = -Math.PI / 2 + (t * 2 * Math.PI) / 3;
       this.bases.push({ x: C + Math.cos(a) * 500, z: C + Math.sin(a) * 500 });
     }
-    this.pois.push({ x: C, z: C, name: 'Vila Central', r: 125 });
+    this.pois.push({ x: C - 45 * Math.cos(-Math.PI / 6), z: C - 45 * Math.sin(-Math.PI / 6), name: 'Vila Central', r: 90 });
     const names = ['Distrito Industrial', 'Fazenda Boa Vista', 'Posto Avançado'];
     const radii = [110, 80, 85];
     for (let k = 0; k < 3; k++) {
       const a = -Math.PI / 2 + Math.PI / 3 + (k * 2 * Math.PI) / 3;
-      this.pois.push({ x: C + Math.cos(a) * 240, z: C + Math.sin(a) * 240, name: names[k], r: radii[k] });
+      const distance = k === 0 ? 180 : 240;
+      this.pois.push({ x: C + Math.cos(a) * distance, z: C + Math.sin(a) * distance, name: names[k], r: radii[k] });
     }
     for (const p of this.pois) this.czCandidates.push({ x: p.x, z: p.z });
 
@@ -386,14 +387,14 @@ export class World {
     const rnd = this.rnd;
     const B = 34, S = 8, P = B + S;
     // ruas
-    for (let k = -3; k <= 2; k++) {
+    for (let k = -2; k <= 1; k++) {
       const c = (k + 0.5) * P;
-      this.streets.push({ x0: T.x + c - S / 2, z0: T.z - 2.5 * P - S / 2, x1: T.x + c + S / 2, z1: T.z + 2.5 * P + S / 2 });
-      this.streets.push({ x0: T.x - 2.5 * P - S / 2, z0: T.z + c - S / 2, x1: T.x + 2.5 * P + S / 2, z1: T.z + c + S / 2 });
-      this.paintRect(T.x + c - S / 2, T.z - 2.5 * P - S / 2, T.x + c + S / 2, T.z + 2.5 * P + S / 2, Surface.Road);
-      this.paintRect(T.x - 2.5 * P - S / 2, T.z + c - S / 2, T.x + 2.5 * P + S / 2, T.z + c + S / 2, Surface.Road);
+      this.streets.push({ x0: T.x + c - S / 2, z0: T.z - 1.5 * P - S / 2, x1: T.x + c + S / 2, z1: T.z + 1.5 * P + S / 2 });
+      this.streets.push({ x0: T.x - 1.5 * P - S / 2, z0: T.z + c - S / 2, x1: T.x + 1.5 * P + S / 2, z1: T.z + c + S / 2 });
+      this.paintRect(T.x + c - S / 2, T.z - 1.5 * P - S / 2, T.x + c + S / 2, T.z + 1.5 * P + S / 2, Surface.Road);
+      this.paintRect(T.x - 1.5 * P - S / 2, T.z + c - S / 2, T.x + 1.5 * P + S / 2, T.z + c + S / 2, Surface.Road);
     }
-    for (let gi = -2; gi <= 2; gi++) for (let gj = -2; gj <= 2; gj++) {
+    for (let gi = -1; gi <= 1; gi++) for (let gj = -1; gj <= 1; gj++) {
       const bx = T.x + gi * P, bz = T.z + gj * P;
       if (gi === 0 && gj === 0) {
         // praça
@@ -436,7 +437,7 @@ export class World {
     }
     // carros abandonados nas ruas
     for (let k = 0; k < 16; k++) {
-      const line = Math.floor(rnd() * 6) - 3, along = (rnd() - 0.5) * 4.8 * P;
+      const line = Math.floor(rnd() * 4) - 2, along = (rnd() - 0.5) * 2.8 * P;
       const c = (line + 0.5) * P + (rnd() < 0.5 ? -2 : 2);
       if (rnd() < 0.5) this.car(T.x + c, T.z + along, false, rnd);
       else this.car(T.x + along, T.z + c, true, rnd);

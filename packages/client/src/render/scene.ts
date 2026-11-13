@@ -291,23 +291,38 @@ export class GameScene {
     this.scene.add(im);
   }
 
-  /** Textura de folhas gerada em código: manchas de folha verde sobre fundo transparente (os vãos deixam ver quem está dentro). */
+  /** Textura de um ramo: roseta de folhas pontudas em 3 camadas (as de fora mais escuras), fundo transparente. */
   private leafTexture(): THREE.CanvasTexture {
-    const S = 128, cv = document.createElement('canvas');
+    const S = 256, cv = document.createElement('canvas');
     cv.width = S; cv.height = S;
     const c = cv.getContext('2d')!;
     c.clearRect(0, 0, S, S);
-    let seed = 12345;
+    let seed = 90211;
     const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
-    const greens = ['#3f7d33', '#4c8f3b', '#2f6a2b', '#5ba043', '#386f30'];
-    for (let i = 0; i < 80; i++) {
-      const x = rnd() * S, y = rnd() * S, r = 4.5 + rnd() * 7, a = rnd() * Math.PI;
-      // parte de baixo (onde ficam o agachado e o deitado) é bem mais rala: a silhueta aparece pelos vãos
-      if (y > S * 0.62 && rnd() < 0.72) continue;
-      c.save(); c.translate(x, y); c.rotate(a);
-      c.fillStyle = greens[Math.floor(rnd() * greens.length)];
-      c.beginPath(); c.ellipse(0, 0, r, r * 0.45, 0, 0, Math.PI * 2); c.fill();
-      c.strokeStyle = 'rgba(20,60,20,.5)'; c.lineWidth = 1; c.beginPath(); c.moveTo(-r, 0); c.lineTo(r, 0); c.stroke();
+    const leaf = (a: number, d0: number, L: number, W: number, base: [number, number, number]) => {
+      const k = 0.86 + rnd() * 0.28;
+      const rgb = (m: number) => `rgb(${Math.round(base[0] * k * m)},${Math.round(base[1] * k * m)},${Math.round(base[2] * k * m)})`;
+      c.save(); c.translate(S / 2, S / 2); c.rotate(a); c.translate(d0, 0);
+      // folha inteira
+      c.beginPath(); c.moveTo(0, 0); c.quadraticCurveTo(L * 0.45, -W, L, 0); c.quadraticCurveTo(L * 0.45, W, 0, 0); c.closePath();
+      c.fillStyle = rgb(1); c.fill();
+      // metade sombreada e nervura clara: dá volume sem depender da luz
+      c.beginPath(); c.moveTo(0, 0); c.quadraticCurveTo(L * 0.45, W, L, 0); c.closePath();
+      c.fillStyle = rgb(0.74); c.fill();
+      c.strokeStyle = rgb(1.28); c.lineWidth = 1.2; c.beginPath(); c.moveTo(2, 0); c.lineTo(L * 0.92, 0); c.stroke();
+      c.restore();
+    };
+    // folhas pequenas e arredondadas espalhadas num disco; as da borda são escuras e desenhadas primeiro,
+    // as do miolo claras por cima — lê como um ramo cheio, não como uma estrela
+    const pts: { r: number; a: number }[] = [];
+    for (let i = 0; i < 86; i++) pts.push({ r: Math.sqrt(rnd()) * 88, a: rnd() * Math.PI * 2 });
+    pts.sort((p, q) => q.r - p.r);
+    for (const pt of pts) {
+      const f = pt.r / 88; // 0 miolo .. 1 borda
+      const L = 30 + rnd() * 20 + (1 - f) * 6;
+      const col: [number, number, number] = [86 - f * 44, 130 - f * 58, 56 - f * 24];
+      c.save(); c.translate(Math.cos(pt.a) * pt.r, Math.sin(pt.a) * pt.r);
+      leaf(pt.a + (rnd() - 0.5) * 1.9, -L * 0.3, L, L * (0.36 + rnd() * 0.1), col);
       c.restore();
     }
     const t = new THREE.CanvasTexture(cv);
@@ -321,28 +336,42 @@ export class GameScene {
   private buildBushes() {
     const bushes = this.world.bushes;
     if (!bushes.length) return;
-    // 8 planos de folhas cruzados (6 em pé, 2 inclinados como "tampa"): denso por fora, com vãos
-    const pos: number[] = [], uv: number[] = [], nor: number[] = [];
-    const plane = (ang: number, tilt: number, off: number, w: number, h: number) => {
-      const ca = Math.cos(ang), sa = Math.sin(ang), ct = Math.cos(tilt), st = Math.sin(tilt);
-      const corner = (u: number, v: number): [number, number, number] => {
-        // v ao longo da altura (inclinada por `tilt` para fora), u ao longo da largura
-        const lx = u * w, ly = v * h * ct, lz = v * h * st + off;
-        return [lx * ca + lz * sa, ly, -lx * sa + lz * ca];
+    // Arbusto arredondado: dezenas de ramos (cartões pequenos) espalhados numa cúpula, virados para fora.
+    // As normais apontam do miolo para fora (luz suave de cúpula) e a cor escurece por dentro e embaixo (sombra própria).
+    const pos: number[] = [], uv: number[] = [], nor: number[] = [], colr: number[] = [];
+    let seed = 4417;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+    const n = new THREE.Vector3(), t = new THREE.Vector3(), b = new THREE.Vector3(), ctr = new THREE.Vector3(), v = new THREE.Vector3(), nn = new THREE.Vector3();
+    const CARDS = 30;
+    for (let i = 0; i < CARDS; i++) {
+      // direção bem distribuída (espiral áurea) do topo até um pouco abaixo do meio
+      const u = (i + 0.5) / CARDS;
+      const phi = Math.acos(1 - u * 1.42), th = i * 2.39996 + rnd() * 0.5;
+      n.set(Math.sin(phi) * Math.cos(th), Math.cos(phi), Math.sin(phi) * Math.sin(th));
+      const k = i % 4 === 3 ? 0.5 + rnd() * 0.2 : 0.8 + rnd() * 0.2; // 1 em 4 fica mais para dentro: enche o miolo
+      ctr.set(n.x * 0.62 * k, Math.max(0.14, 0.42 + n.y * 0.4 * k), n.z * 0.62 * k);
+      // cartão quase de frente para fora, com inclinação e giro aleatórios
+      n.x += (rnd() - 0.5) * 0.7; n.y += (rnd() - 0.5) * 0.7 + 0.15; n.z += (rnd() - 0.5) * 0.7; n.normalize();
+      t.set(0, 1, 0).cross(n); if (t.lengthSq() < 0.01) t.set(1, 0, 0); t.normalize();
+      b.crossVectors(n, t);
+      const ra = rnd() * 6.283, ca = Math.cos(ra), sa = Math.sin(ra), sz = 0.3 + rnd() * 0.12;
+      const tx = t.x * ca + b.x * sa, ty = t.y * ca + b.y * sa, tz = t.z * ca + b.z * sa;
+      const bx = b.x * ca - t.x * sa, by = b.y * ca - t.y * sa, bz = b.z * ca - t.z * sa;
+      const shade = (0.5 + 0.5 * k) * (0.62 + 0.38 * Math.min(1, ctr.y / 0.8)) * (0.9 + rnd() * 0.2);
+      const corner = (cu: number, cv2: number) => {
+        v.set(ctr.x + (tx * cu + bx * cv2) * sz, Math.max(0.02, ctr.y + (ty * cu + by * cv2) * sz), ctr.z + (tz * cu + bz * cv2) * sz);
+        nn.set(v.x, (v.y - 0.25) * 1.3, v.z).normalize();
+        pos.push(v.x, v.y, v.z); nor.push(nn.x, nn.y, nn.z); colr.push(shade, shade, shade);
+        uv.push(cu * 0.5 + 0.5, cv2 * 0.5 + 0.5);
       };
-      const a = corner(-1, 0), b = corner(1, 0), c2 = corner(1, 1), d = corner(-1, 1);
-      pos.push(...a, ...b, ...c2, ...a, ...c2, ...d);
-      uv.push(0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1);
-      for (let i = 0; i < 6; i++) nor.push(0, 1, 0);
-    };
-    for (let i = 0; i < 6; i++) plane((i * Math.PI) / 3 + 0.2, 0.18 + (i % 2) * 0.12, 0.05, 1.05, 1.05);
-    plane(0.6, 1.15, 0.1, 0.95, 0.95);
-    plane(2.4, 1.15, 0.1, 0.95, 0.95);
+      corner(-1, -1); corner(1, -1); corner(1, 1); corner(-1, -1); corner(1, 1); corner(-1, 1);
+    }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
-    const mat = new THREE.MeshLambertMaterial({ map: this.leafTexture(), alphaTest: 0.5, side: THREE.DoubleSide, color: 0xffffff });
+    g.setAttribute('color', new THREE.Float32BufferAttribute(colr, 3));
+    const mat = new THREE.MeshLambertMaterial({ map: this.leafTexture(), alphaTest: 0.45, side: THREE.DoubleSide, color: 0xffffff, vertexColors: true });
     const U = this.bushU;
     mat.onBeforeCompile = (sh) => {
       sh.uniforms.uTime = U.uTime;
@@ -350,7 +379,7 @@ export class GameScene {
       sh.vertexShader = 'uniform float uTime;\nuniform vec4 uMovers[16];\nvarying float vCamDist;\n' + sh.vertexShader
         .replace('#include <begin_vertex>', `#include <begin_vertex>
           vec3 ctr = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
-          float h01 = clamp(position.y, 0.0, 1.6) / 1.6;
+          float h01 = clamp(position.y, 0.0, 1.0);
           float sw = sin(uTime * 1.7 + ctr.x * 0.35 + ctr.z * 0.21) * 0.5 + sin(uTime * 2.9 + ctr.z * 0.5) * 0.25;
           transformed.x += sw * 0.10 * h01; transformed.z += sw * 0.05 * h01;`)
         .replace('#include <project_vertex>', `
@@ -372,15 +401,17 @@ export class GameScene {
       sh.fragmentShader = 'varying float vCamDist;\n' + sh.fragmentShader.replace('#include <alphatest_fragment>', `
         // folhas coladas na câmera somem (em tramado), para quem está dentro da moita enxergar para fora
         if (vCamDist < 1.7 && fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) > vCamDist / 1.7) discard;
-        #include <alphatest_fragment>`);
+        #include <alphatest_fragment>`)
+        // o verso do cartão usa a mesma normal de cúpula (sem isso metade dos ramos fica preta)
+        .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n normal = normalize(vNormal);');
     };
     const im = new THREE.InstancedMesh(g, mat, bushes.length);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
     const col = new THREE.Color();
-    const tones = [0xffffff, 0xe6f2d8, 0xd2e8c0, 0xf2ecc8];
+    const tones = [0xffffff, 0xe9f0d6, 0xd6e6c6, 0xf3ecc9, 0xdfe9cf];
     bushes.forEach((bu, i) => {
       q.setFromAxisAngle(up, (i * 1.618) % (Math.PI * 2));
-      m.compose(p.set(bu.x, bu.y - 0.1, bu.z), q, s.set(bu.r * 1.1, bu.h * 1.0, bu.r * 1.1));
+      m.compose(p.set(bu.x, bu.y - 0.08, bu.z), q, s.set(bu.r, bu.h, bu.r));
       im.setMatrixAt(i, m);
       im.setColorAt(i, col.setHex(tones[i % tones.length]));
     });

@@ -129,7 +129,8 @@ export class UI {
     for (let t = 0; t < 3; t++) {
       const d = document.createElement('div');
       d.className = 'score'; d.id = 'score' + t;
-      d.innerHTML = `<div class="bar2" style="background:${TEAM_CSS[t]}"></div><b style="color:${TEAM_CSS[t]}">0</b><span></span>`;
+      // jogadores vivos · pontos · barrinha que cresce com a porcentagem até a vitória
+      d.innerHTML = `<span class="cnt" style="color:${TEAM_CSS[t]}"><svg viewBox="0 0 10 12"><circle cx="5" cy="3" r="2.6"/><path d="M0 12c0-4 2-5.6 5-5.6s5 1.600 5 5.600z"/></svg><i>0</i></span><b>000</b><div class="track"><div class="bar2" style="background:${TEAM_CSS[t]}"></div></div>`;
       sc.appendChild(d);
     }
     setInterval(() => this.tickWait(), 250);
@@ -142,17 +143,37 @@ export class UI {
     for (let t = 0; t < 3; t++) {
       const d = $('score' + t);
       (d.querySelector('.bar2') as HTMLElement).style.width = Math.min(100, (s.scores[t] / SCORE_TO_WIN) * 100) + '%';
-      d.querySelector('b')!.textContent = s.scores[t].toFixed(1);
-      const rate = s.control === t ? ` · +${(s.presence[t] * SCORE_PER_PRESENCE_SECOND).toFixed(2)}/s` : '';
-      d.querySelector('span')!.textContent = `${TEAM_NAMES[t]} · ${s.presence[t]} na zona${rate}`;
+      d.querySelector('b')!.textContent = String(Math.floor(s.scores[t])).padStart(3, '0');
+      d.querySelector('.cnt i')!.textContent = String(s.counts?.[t] ?? 0);
+      d.title = `${TEAM_NAMES[t]} · ${s.counts?.[t] ?? 0} na Control Zone`;
       d.classList.toggle('ctrl', s.control === t);
       d.classList.toggle('mine', t === myTeam);
     }
     const mmss = (n: number) => `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
-    $('phase').textContent = s.phase === 'warmup' ? `Aquecimento · começa em ${s.timeLeft}s`
-      : s.phase === 'end' ? `Fim de partida — ${TEAM_NAMES[s.winner] ?? ''} venceu · nova em ${s.timeLeft}s`
-      : `Primeiro a ${SCORE_TO_WIN} vence · Hot Zone muda em ${mmss(s.hzIn)}`;
+    // barra do próximo ponto: enche na cor de quem domina até +1; troca de cor quando outro time assume; empate = cinza
+    const fill = $('phaseFill'), main = $('phaseMain');
+    $('phaseHz').textContent = s.phase === 'live' ? `HZ ${mmss(s.hzIn)}` : '';
+    let width = 0, color = '#7d8a85';
+    if (s.phase === 'warmup') main.textContent = `Aquecimento · começa em ${s.timeLeft}s`;
+    else if (s.phase === 'end') main.textContent = `Fim — ${TEAM_NAMES[s.winner] ?? ''} venceu · nova em ${s.timeLeft}s`;
+    else if (s.control >= 0) {
+      const c = s.control, frac = ((s.scores[c] % 1) + 1) % 1;
+      width = frac * 100; color = TEAM_CSS[c];
+      main.textContent = `${TEAM_NAMES[c]} dominando · +${(s.presence[c] * SCORE_PER_PRESENCE_SECOND).toFixed(2)}/s · ${Math.floor(frac * 100)}%`;
+    } else {
+      const anyone = s.presence.some((v) => v > 0);
+      width = anyone ? 100 : 0;
+      main.textContent = anyone ? 'Empate na Control Zone' : 'Control Zone vazia';
+    }
+    // mesmo time e enchendo: anima; trocou de time, completou o ponto ou empatou: pula direto (sem "voltar" animado)
+    const jump = s.control !== this.phaseCtrl || width < this.phaseW;
+    if (jump) fill.style.transition = 'none';
+    fill.style.background = color;
+    fill.style.width = width + '%';
+    if (jump) { void fill.offsetWidth; fill.style.transition = ''; }
+    this.phaseCtrl = s.control; this.phaseW = width;
   }
+  private phaseCtrl = -2; private phaseW = 0;
 
   setZone(w: ZoneWhere, alive: boolean) {
     const el = $('zoneinfo');
@@ -207,7 +228,7 @@ export class UI {
           <div><span>Velocidade máx.</span> <b>${speedKmh} km/h</b></div>
           <div><span>Blindagem</span> <b>${v.maxHp} HP</b></div>
           <div><span>Aceleração</span> <b>${v.accel >= 14 ? 'Alta' : 'Média'}</b></div>
-          <div><span>Tração</span> <b>4x4 Off-Road</b></div>
+          <div><span>Lotação</span> <b>${v.id === 'quad' ? '2 · piloto + garupa' : '2+'}</b></div>
         </div>
         <div class="vFooter">
           <div class="vPrice">${money(v.price)}</div>
@@ -312,7 +333,7 @@ export class UI {
 
   downed(on: boolean, left = 0) {
     this.show('downed', on);
-    if (on) $('downLeft').textContent = String(Math.max(0, Math.ceil(left)));
+    if (on) { const n = Math.max(0, Math.ceil(left)); $('downLeft').textContent = left < 0 || !Number.isFinite(left) ? 'Sem limite de tempo' : `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`; }
   }
 
   perf(text: string) { $('perf').textContent = text; }
@@ -568,19 +589,27 @@ export class UI {
     const Y = (x: number, z: number) => H + sc * ((x - px) * sinY + (z - pz) * cosY);
     c.clearRect(0, 0, S, S);
     c.save();
-    c.beginPath(); c.arc(H, H, H - 1, 0, 6.2832); c.clip();
-    c.fillStyle = '#10161a'; c.fillRect(0, 0, S, S);
+    // minimapa quadrado; circular é só a zona
+    c.fillStyle = '#0c1410'; c.fillRect(0, 0, S, S);
     if (this.mmBase) {
       c.save();
       c.translate(H, H); c.rotate(yaw); c.scale(sc, sc); c.translate(-px, -pz);
       c.imageSmoothingEnabled = sc < 1.2;
-      c.drawImage(this.mmBase, 0, 0, WORLD_SIZE, WORLD_SIZE);
+      // desenha só o trecho visível (raio cobre a diagonal do quadrado): bem mais leve que girar o mapa inteiro a cada quadro
+      const half = (H * 1.45) / sc, k = this.mmBase.width / WORLD_SIZE;
+      const x0 = Math.max(0, px - half), x1 = Math.min(WORLD_SIZE, px + half), z0 = Math.max(0, pz - half), z1 = Math.min(WORLD_SIZE, pz + half);
+      if (x1 > x0 && z1 > z0) c.drawImage(this.mmBase, x0 * k, z0 * k, (x1 - x0) * k, (z1 - z0) * k, x0, z0, x1 - x0, z1 - z0);
       c.restore();
     }
+    // película verde-escura de mapa tático; fora da Control Zone fica mais escuro, então o círculo da zona se destaca
+    c.fillStyle = 'rgba(10,52,36,.46)'; c.fillRect(0, 0, S, S);
+    c.fillStyle = 'rgba(2,10,7,.45)';
+    c.beginPath(); c.rect(0, 0, S, S); c.arc(X(cz.x, cz.z), Y(cz.x, cz.z), cz.r * sc, 0, 6.2832); c.fill('evenodd');
     // zonas
-    c.lineWidth = 2;
-    c.strokeStyle = 'rgba(255,255,255,.9)'; c.fillStyle = 'rgba(255,255,255,.10)';
+    c.lineWidth = 1.5;
+    c.strokeStyle = 'rgba(214,240,226,.75)'; c.fillStyle = 'rgba(190,235,210,.07)';
     c.beginPath(); c.arc(X(cz.x, cz.z), Y(cz.x, cz.z), cz.r * sc, 0, 6.2832); c.fill(); c.stroke();
+    c.lineWidth = 2;
     c.strokeStyle = '#ff8a1f'; c.fillStyle = 'rgba(255,138,31,.38)';
     c.beginPath(); c.arc(X(hz.x, hz.z), Y(hz.x, hz.z), Math.max(4, hz.r * sc), 0, 6.2832); c.fill(); c.stroke();
     // bases
@@ -599,7 +628,7 @@ export class UI {
     // aliados e alvos marcados
     for (const d of dots) {
       const x = X(d.x, d.z), y = Y(d.x, d.z);
-      if ((x - H) ** 2 + (y - H) ** 2 > (H + 6) ** 2) continue;
+      if (Math.abs(x - H) > H + 6 || Math.abs(y - H) > H + 6) continue;
       c.fillStyle = d.kind === 1 ? '#ff3030' : d.kind === 2 ? '#ffe14d' : TEAM_CSS[d.team];
       c.strokeStyle = '#000'; c.lineWidth = 1;
       c.beginPath(); c.arc(x, y, d.kind === 1 ? 4 : 3.2, 0, 6.2832); c.fill(); c.stroke();
@@ -608,7 +637,7 @@ export class UI {
     if (vehicles) {
       for (const v of vehicles) {
         const x = X(v.x, v.z), y = Y(v.x, v.z);
-        if ((x - H) ** 2 + (y - H) ** 2 > (H + 6) ** 2) continue;
+        if (Math.abs(x - H) > H + 6 || Math.abs(y - H) > H + 6) continue;
         c.fillStyle = v.driverId !== -1 ? '#f5c542' : '#ffffff';
         c.strokeStyle = '#000'; c.lineWidth = 1;
         c.beginPath(); c.rect(x - 3, y - 3, 6, 6); c.fill(); c.stroke();
@@ -616,10 +645,10 @@ export class UI {
     }
     // seta na borda apontando a Control Zone quando ela está fora do mapa visível
     const zx = X(cz.x, cz.z) - H, zy = Y(cz.x, cz.z) - H;
-    const zd = Math.hypot(zx, zy);
-    if (zd > H - 4 + cz.r * sc) {
+    if (Math.max(Math.abs(zx), Math.abs(zy)) > H - 4 + cz.r * sc) {
       const a = Math.atan2(zy, zx);
-      c.save(); c.translate(H + Math.cos(a) * (H - 12), H + Math.sin(a) * (H - 12)); c.rotate(a);
+      const ek = (H - 12) / Math.max(Math.abs(Math.cos(a)), Math.abs(Math.sin(a))); // encosta na borda do quadrado
+      c.save(); c.translate(H + Math.cos(a) * ek, H + Math.sin(a) * ek); c.rotate(a);
       c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 1.5;
       c.beginPath(); c.moveTo(9, 0); c.lineTo(-6, 7); c.lineTo(-3, 0); c.lineTo(-6, -7); c.closePath(); c.fill(); c.stroke();
       c.restore();
@@ -628,13 +657,15 @@ export class UI {
     {
       // o norte do mundo (−Z) passa pela mesma transformação do resto do mapa
       const ax = X(px, pz - 1000) - H, ay = Y(px, pz - 1000) - H, al = Math.hypot(ax, ay) || 1;
-      c.fillStyle = 'rgba(0,0,0,.55)'; c.beginPath(); c.arc(H + (ax / al) * (H - 11), H + (ay / al) * (H - 11), 8, 0, 6.2832); c.fill();
+      const nk = (H - 11) / Math.max(Math.abs(ax / al), Math.abs(ay / al));
+      const nx = H + (ax / al) * nk, ny = H + (ay / al) * nk;
+      c.fillStyle = 'rgba(0,0,0,.55)'; c.beginPath(); c.arc(nx, ny, 8, 0, 6.2832); c.fill();
       c.fillStyle = '#fff'; c.font = 'bold 11px system-ui'; c.textAlign = 'center';
-      c.fillText('N', H + (ax / al) * (H - 11), H + (ay / al) * (H - 11) + 4);
+      c.fillText('N', nx, ny + 4);
     }
     c.restore();
-    c.strokeStyle = 'rgba(255,255,255,.35)'; c.lineWidth = 2;
-    c.beginPath(); c.arc(H, H, H - 1, 0, 6.2832); c.stroke();
+    c.strokeStyle = 'rgba(200,230,215,.4)'; c.lineWidth = 2;
+    c.strokeRect(1, 1, S - 2, S - 2);
     // cone de visão e marcador do jogador (sempre no centro, apontando para cima)
     c.save(); c.translate(H, H);
     const g = c.createRadialGradient(0, 0, 0, 0, 0, 62);

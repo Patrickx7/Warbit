@@ -1,13 +1,14 @@
 import { Footsteps } from './footsteps';
 import { KillConfirmation } from './killConfirmation';
+import { LootPanel } from './loot';
 import { getEquipmentVendorPos, Surface, type Magazine } from '@warbit/shared';
 import * as THREE from 'three';
 import {
   BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD, BTN2_SECONDARY, BTN2_USE, BTN3_FOB, BTN3_PRONE, BTN_BACK, BTN_CROUCH,
   BTN_FIRE, BTN_FWD, BTN_JUMP, BTN_LEFT, BTN_RIGHT, BTN_SPRINT, BoxKind, DT, ITEMS, ITEM_BY_ID, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, MSG_SNAPSHOT,
-  REVIVE_RANGE, SPRINT_FLAG_SPEED, TEAM_NAMES, TICK_RATE, World, aimDir, buildLoadout, decodeSnapshot, encodeInput, eyeHeight, maskHas,
+  LOOT_RANGE, REVIVE_RANGE, SPRINT_FLAG_SPEED, TEAM_NAMES, TICK_RATE, World, aimDir, buildLoadout, decodeSnapshot, encodeInput, eyeHeight, maskHas,
   newMoveState, stepMove, whereIs, rewardFor,
-  getVendorPos, stepVehicle, VEHICLE_BY_ID, type VehicleState,
+  getVendorPos, newVehicle, stepVehicle, VEHICLE_BY_ID, type VehicleState,
   type ClientMsg, type EntityState, type Loadout, type MoveState, type OwnState, type RosterEntry, type ServerMsg, type Snapshot, type Zone,
 } from '@warbit/shared';
 import { Sfx } from './audio';
@@ -17,6 +18,7 @@ import { GUN_KIND, Soldiers, TEAM_LOOK, type SoldierPose } from './render/soldie
 import { SoldierPreview } from './render/preview';
 import { WEAPON_ITEMS, gunModel } from './render/guns';
 import { ViewModel } from './render/viewmodel';
+import { Handlebars } from './render/handlebars';
 import { VehicleRenderer } from './render/vehicles';
 import { UI, esc, type MapDot, type MapFob } from './ui';
 
@@ -25,7 +27,8 @@ const canvas = $<HTMLCanvasElement>('game');
 const UNIFORM = TEAM_LOOK.map((l) => l.jacket);
 const BASE_FOV = 75;
 const DEG = Math.PI / 180;
-const KEYS_TO_LOCK = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyC', 'KeyZ', 'KeyQ', 'KeyE', 'KeyR', 'KeyF', 'KeyB', 'KeyG', 'KeyH', 'KeyN', 'ControlLeft', 'ControlRight'];
+const aimV = { x: 0, y: 0, z: 0 };
+const KEYS_TO_LOCK = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyC', 'KeyZ', 'KeyQ', 'KeyE', 'KeyR', 'KeyF', 'KeyB', 'KeyG', 'KeyH', 'KeyN', 'KeyX', 'ControlLeft', 'ControlRight'];
 
 interface Sample { t: number; x: number; y: number; z: number; yaw: number; pitch: number }
 interface Ent { samples: Sample[]; s: EntityState; shot: number; x: number; y: number; z: number; yaw: number; pitch: number }
@@ -41,6 +44,7 @@ function lerpAngle(a: number, b: number, t: number) {
 }
 
 class Game {
+  lootPanel = new LootPanel((body, slot) => this.send({ t: 'swapLootWeapon', target: body.target, revision: body.revision, slot }), () => { this.send({ t: 'loot' }); this.send({ t: 'inspectLoot' }); }, () => { this.lootPanel.hide(); if (this.life === LIFE_ALIVE) this.lockInput(); });
   ui = new UI();
   sfx = new Sfx();
   killConfirmation = new KillConfirmation();
@@ -54,8 +58,13 @@ class Game {
   fx!: Fx;
   vm!: ViewModel;
   vehicleRenderer!: VehicleRenderer;
+  bars!: Handlebars;
+  /** yaw do quadriciclo no tick anterior/atual: a câmera interpola entre os dois (o tick é 30 Hz, a tela não) */
+  private vehYawPrev = 0; private vehYaw = 0; private vehSteer = 0;
   vehicles: VehicleState[] = [];
   myVehicleId = -1;
+  aimDelay = 4;
+  isDriver = false; // false = garupa
   ready = false;
   name = 'Mercenário';
   reconnects = 0;
@@ -92,6 +101,26 @@ class Game {
   tickOffset = 0; haveOffset = false;
   cz: Zone = { x: 750, z: 750, r: 150 }; hz: Zone = { x: 750, z: 750, r: 30 };
   fobs: MapFob[] = [];
+  drops: { id: number; x: number; y: number; z: number }[] = [];
+  private dropMeshes = new Map<number, THREE.Mesh>();
+  private dropGeo = new THREE.BoxGeometry(0.42, 0.3, 0.26);
+  private dropMat = new THREE.MeshLambertMaterial({ color: 0x6b5a3a, emissive: 0x2a2210 });
+
+  /** Mochilas no chão (loot): cria/remove as caixinhas conforme o servidor manda. */
+  private syncDrops(list: { id: number; x: number; y: number; z: number }[]) {
+    this.drops = list;
+    if (!this.gs) return;
+    const ids = new Set(list.map((d) => d.id));
+    for (const [id, mesh] of this.dropMeshes) if (!ids.has(id)) { this.gs.scene.remove(mesh); this.dropMeshes.delete(id); }
+    for (const d of list) {
+      if (this.dropMeshes.has(d.id)) continue;
+      const mesh = new THREE.Mesh(this.dropGeo, this.dropMat);
+      mesh.position.set(d.x, d.y + 0.15, d.z);
+      mesh.rotation.y = d.id * 1.7;
+      this.gs.scene.add(mesh);
+      this.dropMeshes.set(d.id, mesh);
+    }
+  }
   phase = 'warmup';
 
   acc = 0; last = 0;
@@ -150,6 +179,7 @@ class Game {
     this.fx = new Fx(this.gs.scene, this.world);
     this.vm = new ViewModel(this.gs.camera, UNIFORM[this.myTeam]);
     this.vehicleRenderer = new VehicleRenderer(this.gs.scene, this.world);
+    this.bars = new Handlebars(this.gs.camera, UNIFORM[this.myTeam]);
     this.ui.onBuyVehicle = (vType) => this.send({ t: 'buyVehicle', vehicleType: vType });
     this.ui.setWorld(this.world);
     this.ready = true;
@@ -199,8 +229,13 @@ class Game {
         this.refreshTools();break;
       }
       case 'roster': this.setRoster(m.roster); break;
+      case 'lootView':
+        if (this.life !== LIFE_ALIVE) break;
+        this.lootPanel.show(m.body);
+        if (m.body) { this.keys.clear(); this.mouseL=this.mouseR=false; this.ui.show('paused',false); document.exitPointerLock(); }
+        break;
       case 'state':
-        this.cz = m.cz; this.hz = m.hz; this.phase = m.phase; this.fobs = m.fobs;
+        this.cz = m.cz; this.hz = m.hz; this.phase = m.phase; this.fobs = m.fobs; this.syncDrops(m.drops ?? []);
         if (this.ready) this.gs.setZones(m.cz, m.hz);
         this.ui.setState(m, this.myTeam);
         break;
@@ -230,16 +265,22 @@ class Game {
       }
       case 'board': this.ui.board(m.rows, this.roster, this.myId); break;
       case 'vehicles': {
+        const local = this.isDriver ? this.vehicles.find((v) => v.id === this.myVehicleId) : undefined;
         this.vehicles = m.list;
-        const myV = this.vehicles.find((v) => v.driverId === this.myId);
+        if (local) {
+          const srv = this.vehicles.find((v) => v.id === local.id);
+          // mesma física e mesmos inputs dos dois lados: mantém o estado previsto, só corrige se divergiu muito (batida)
+          if (srv && srv.driverId === this.myId && Math.hypot(srv.x - local.x, srv.z - local.z) < 6) {
+            srv.x = local.x; srv.y = local.y; srv.z = local.z; srv.yaw = local.yaw; srv.speed = local.speed;
+            srv.steer = local.steer; srv.pitch = local.pitch; srv.roll = local.roll;
+          }
+        }
+        const myV = this.vehicles.find((v) => v.driverId === this.myId || v.passengerId === this.myId);
+        this.isDriver = myV?.driverId === this.myId;
         const nowDriving = !!myV;
         const wasDriving = this.myVehicleId !== -1;
         this.myVehicleId = myV ? myV.id : -1;
-        if (nowDriving && !wasDriving) {
-          this.sfx.startEngine();
-        } else if (!nowDriving && wasDriving) {
-          this.sfx.stopEngine();
-        }
+        if (nowDriving && !wasDriving && myV) { this.vehYawPrev = this.vehYaw = myV.yaw; this.yaw = myV.yaw; this.pitch = 0; }
         break;
       }
       case 'vehicleBoom': {
@@ -259,15 +300,13 @@ class Game {
   }
 
   private setLife(life: number, reason?: string, downLeft?: number, tools?: Record<string, number>, wait?: number) {
+    this.lootPanel.hide();
     const was = this.life;
     this.life = life;
     if (life !== LIFE_ALIVE) this.killConfirmation.reset();
     if (life !== LIFE_ALIVE) {
       this.ui.show('board', false);this.ui.closeShop();
-      if (this.myVehicleId !== -1) {
-        this.myVehicleId = -1;
-        this.sfx.stopEngine();
-      }
+      this.myVehicleId = -1;
       this.ui.closeVehicleShop();
     }
     if (tools) { this.tools.frag = tools.frag ?? 0; this.tools.medbag = tools.medbag ?? 0; this.tools.build = tools.build ?? 0; this.tools.fob = tools.fob ?? 0; this.refreshTools(); }
@@ -277,7 +316,7 @@ class Game {
       if (was === LIFE_NONE) { this.slot = 0; this.nextFire = 0; this.simTime = 0; this.lastShotAt = -1; this.faceZone = true; this.prone = false; this.recP = this.recY = 0; this.burst = 0; }
       this.lockInput();
     } else if (life === LIFE_DOWNED) {
-      this.downUntil = performance.now() + (downLeft ?? 20) * 1000;
+      this.downUntil = downLeft === -1 ? Infinity : performance.now() + (downLeft ?? 20) * 1000;
       this.ui.downed(true, downLeft ?? 20);
     } else {
       this.ui.downed(false);
@@ -344,7 +383,11 @@ class Game {
     this.own = o;
     if (o.life !== this.life && (o.life === LIFE_ALIVE || this.life === LIFE_ALIVE) && o.life !== LIFE_NONE) this.setLife(o.life);
     const p = this.pred;
-    if (o.life === LIFE_ALIVE) {
+    if (o.life === LIFE_ALIVE && this.myVehicleId !== -1 && this.isDriver) {
+      let i = 0;
+      while (i < this.pending.length && this.pending[i].seq <= s.ack) i++;
+      if (i) this.pending.splice(0, i);
+    } else if (o.life === LIFE_ALIVE) {
       if (this.faceZone) {
         this.faceZone = false;
         this.yaw = Math.atan2(-(this.cz.x - o.x), -(this.cz.z - o.z));
@@ -357,7 +400,7 @@ class Game {
       let i = 0;
       while (i < this.pending.length && this.pending[i].seq <= s.ack) i++;
       if (i) this.pending.splice(0, i);
-      for (const inp of this.pending) stepMove(p, inp.buttons, inp.yaw, this.world, DT, this.speedMul, inp.buttons3);
+      if (!(this.myVehicleId !== -1 && !this.isDriver)) for (const inp of this.pending) stepMove(p, inp.buttons, inp.yaw, this.world, DT, this.speedMul, inp.buttons3);
       const dx = bx - p.x, dy = by - p.y, dz = bz - p.z;
       const d2 = dx * dx + dy * dy + dz * dz;
       if (d2 > 9) { this.errX = this.errY = this.errZ = 0; this.prevX = p.x; this.prevY = p.y; this.prevZ = p.z; }
@@ -447,16 +490,19 @@ class Game {
     if (this.life !== LIFE_ALIVE) return;
     const [b, b2, b3] = this.buttons();
     const aimYaw = this.yaw + this.recY, aimPitch = Math.max(-1.5, Math.min(1.5, this.pitch + this.recP));
-    if (this.myVehicleId !== -1) {
+    if (this.myVehicleId !== -1 && !this.isDriver) {
+      // garupa: o servidor manda a posição; entre snapshots segue na velocidade do quadriciclo
+      p.x += p.vx * DT; p.z += p.vz * DT;
+    } else if (this.myVehicleId !== -1) {
       const myV = this.vehicles.find((v) => v.id === this.myVehicleId);
       if (myV) {
         stepVehicle(myV, b, DT, this.world);
         p.x = myV.x; p.y = myV.y; p.z = myV.z;
         p.vx = -Math.sin(myV.yaw) * myV.speed;
         p.vz = -Math.cos(myV.yaw) * myV.speed;
+        p.crouch = false; p.prone = false;
+        this.vehYawPrev = this.vehYaw; this.vehYaw = myV.yaw; this.vehSteer = myV.steer;
         this.yaw = myV.yaw;
-        this.pitch = myV.pitch;
-        this.sfx.updateEngine(Math.abs(myV.speed) / 17.5);
       }
     } else {
       stepMove(p, b, aimYaw, this.world, DT, this.speedMul, b3);
@@ -465,14 +511,14 @@ class Game {
     const seq = ++this.seq;
     this.pending.push({ seq, buttons: b, buttons3: b3, yaw: aimYaw });
     if (this.pending.length > 90) this.pending.shift();
-    const rt = Math.max(0, Math.floor(performance.now() * (TICK_RATE / 1000) + this.tickOffset - 4));
+    const rt = Math.max(0, Math.floor(performance.now() * (TICK_RATE / 1000) + this.tickOffset - this.aimDelay));
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(encodeInput({ seq, buttons: b, buttons2: b2, buttons3: b3, yaw: aimYaw, pitch: aimPitch, renderTick: rt }));
 
     // tiro local (efeito imediato; o servidor decide o acerto)
     const it = this.weapon();
     const w = it?.weapon;
     const sprinting = (b & BTN_SPRINT) !== 0 && !p.prone && !p.crouch && Math.hypot(p.vx, p.vz) > SPRINT_FLAG_SPEED;
-    if (this.myVehicleId === -1 && w && b & BTN_FIRE && !sprinting && (w.auto || !(this.prevButtons & BTN_FIRE)) && this.simTime >= this.nextFire && this.localAmmo > 0 && !(this.own && this.own.flags & 1)) {
+    if ((this.myVehicleId === -1 || !this.isDriver) && w && b & BTN_FIRE && !sprinting && (w.auto || !(this.prevButtons & BTN_FIRE)) && this.simTime >= this.nextFire && this.localAmmo > 0 && !(this.own && this.own.flags & 1)) {
       this.localAmmo--;
       this.nextFire = this.simTime + 60 / w.rpm;
       this.lastShotAt = this.simTime;
@@ -558,13 +604,16 @@ class Game {
       cam.lookAt(this.cz.x, cy + 5, this.cz.z);
       cam.fov = BASE_FOV;
     } else {
-      const targetEye = this.life === LIFE_DOWNED ? 0.35 : eyeHeight(p);
+      const targetEye = this.life === LIFE_DOWNED ? 0.35 : this.myVehicleId !== -1 ? Handlebars.EYE.y : eyeHeight(p);
       this.eye += (targetEye - this.eye) * Math.min(1, dt * 12);
       const x = this.prevX + (p.x - this.prevX) * alpha + this.errX;
       const y = this.prevY + (p.y - this.prevY) * alpha + this.errY;
       const z = this.prevZ + (p.z - this.prevZ) * alpha + this.errZ;
       cam.position.set(x, y + this.eye, z);
-      cam.rotation.set(Math.max(-1.5, Math.min(1.5, this.pitch + this.recP)), this.yaw + this.recY, this.life === LIFE_DOWNED ? 0.35 : 0, 'YXZ');
+      const ride = this.myVehicleId !== -1 && !this.isDriver ? this.vehicleRenderer.display(this.myVehicleId) : null;
+      if (ride) cam.position.set(ride.position.x + Math.sin(ride.rotation.y) * 0.55, ride.position.y + 1.62, ride.position.z + Math.cos(ride.rotation.y) * 0.55);
+      if (this.myVehicleId !== -1 && this.isDriver) cam.rotation.set(-Handlebars.PITCH, lerpAngle(this.vehYawPrev, this.vehYaw, alpha), 0, 'YXZ'); // olha para baixo: vê a frente do quadriciclo
+      else cam.rotation.set(Math.max(-1.5, Math.min(1.5, this.pitch + this.recP)), this.yaw + this.recY, this.life === LIFE_DOWNED ? 0.35 : 0, 'YXZ');
       ads = alive && this.mouseR && this.locked();
       const zoom = w ? 1 - (1 - zoomEff) * this.vm.adsAmount : 1;
       cam.fov = BASE_FOV * zoom;
@@ -572,18 +621,42 @@ class Game {
     cam.updateProjectionMatrix();
     this.sfx.setListener(cam.position.x, cam.position.y, cam.position.z, this.yaw);
 
+    // veículos antes dos soldados (quem está montado senta onde o quadriciclo é desenhado).
+    // Os dos outros andam por conta própria entre um pacote do servidor e outro (5x/s).
+    const pilot = this.myVehicleId !== -1 && this.isDriver;
+    for (const v of this.vehicles) {
+      if ((pilot && v.id === this.myVehicleId) || Math.abs(v.speed) < 0.05) continue;
+      v.x -= Math.sin(v.yaw) * v.speed * dt; v.z -= Math.cos(v.yaw) * v.speed * dt;
+      v.y = this.world.groundAt(v.x, v.z, v.y + 0.4, 1);
+    }
+    this.vehicleRenderer?.update(this.vehicles, dt, pilot ? { id: this.myVehicleId, x: cam.position.x, y: cam.position.y - this.eye, z: cam.position.z, yaw: cam.rotation.y } : undefined);
+    this.sfx.updateEngines(this.vehicles.filter((v) => v.driverId !== -1).map((v) => {
+      const d = this.vehicleRenderer.display(v.id);
+      return { id: v.id, x: d ? d.position.x : v.x, y: d ? d.position.y : v.y, z: d ? d.position.z : v.z, speed: v.speed };
+    }));
+
     // soldados
     const rtBase = now * (TICK_RATE / 1000) + this.tickOffset;
     const s = this.soldiers;
     s.begin();
     const dots: MapDot[] = [];
-    let reviveHint: string | null = null;
+    let bestDot = 0;
+    let reviveHint: string | null = null, lootHint: string | null = null;
     const hasRevive = !!this.loadout?.tools.some((t) => t.tool === 'revive' || t.tool === 'defib');
     for (const [id, e] of this.ents) {
       const sm = e.samples;
       if (!sm.length) continue;
       const lastGap = sm.length > 1 ? sm[sm.length - 1].t - sm[sm.length - 2].t : 2;
-      const rt = rtBase - Math.max(4, Math.min(12, lastGap * 1.3 + 1.5));
+      const delay = Math.max(4, Math.min(12, lastGap * 1.3 + 1.5));
+      const rt = rtBase - delay;
+      // lag compensation: o servidor precisa voltar no tempo exatamente o atraso com que EU vejo quem está sob a mira
+      if (alive && e.s.team !== this.myTeam && e.s.life !== LIFE_NONE) {
+        const ddx = e.x - cam.position.x, ddy = e.y + 1.2 - cam.position.y, ddz = e.z - cam.position.z;
+        const dl = Math.hypot(ddx, ddy, ddz) || 1;
+        aimDir(this.yaw + this.recY, this.pitch + this.recP, aimV);
+        const dot = (ddx * aimV.x + ddy * aimV.y + ddz * aimV.z) / dl;
+        if (dot > bestDot && dot > 0.9) { bestDot = dot; this.aimDelay = delay; }
+      }
       let a = sm[0], b = sm[sm.length - 1];
       if (rt >= b.t) a = b;
       else for (let i = sm.length - 2; i >= 0; i--) if (sm[i].t <= rt) { a = sm[i]; b = sm[i + 1]; break; }
@@ -606,6 +679,17 @@ class Game {
       pose.id = id; pose.x = e.x; pose.y = e.y; pose.z = e.z; pose.yaw = e.yaw; pose.pitch = e.pitch;
       pose.crouch = st.crouch; pose.prone = st.prone; pose.sprint = st.sprint; pose.downed = downed; pose.team = st.team; pose.armor = st.armor; pose.helmet = st.helmet; pose.pack = st.pack;
       pose.gun = st.weapon;
+      // montado no quadriciclo: senta no banco do veículo desenhado
+      pose.seat = 0;
+      const rv = this.vehicles.find((v) => v.driverId === id || v.passengerId === id);
+      const rd = rv ? this.vehicleRenderer.display(rv.id) : null;
+      if (rv && rd && st.life === LIFE_ALIVE) {
+        pose.seat = rv.driverId === id ? 1 : 2;
+        pose.x = rd.position.x; pose.y = rd.position.y; pose.z = rd.position.z;
+        pose.seatYaw = rd.rotation.y; pose.seatPitch = rv.pitch; pose.seatRoll = rv.roll;
+        pose.crouch = false; pose.prone = false; pose.sprint = false;
+        if (pose.seat === 1) pose.yaw = rd.rotation.y;
+      }
       pose.dist = Math.hypot(e.x - cam.position.x, e.z - cam.position.z);
       pose.marker = ally ? 1 : st.marked ? 2 : 0;
       pose.camo = this.world.inBush(e.x, e.z) ? 1 : 0;
@@ -615,8 +699,11 @@ class Game {
       if (ally && downed && alive && Math.hypot(e.x - p.x, e.z - p.z, e.y - p.y) < REVIVE_RANGE) {
         const nm = this.roster.get(id)?.name ?? 'aliado';
         reviveHint = hasRevive ? `Segure [E] para reanimar ${nm}` : `${nm} está caído — você precisa de um Reanimador`;
+      } else if (!ally && downed && alive && Math.hypot(e.x - p.x, e.z - p.z, e.y - p.y) < LOOT_RANGE) {
+        lootHint = 'Pressione [X] para lootear o corpo';
       }
     }
+    if (alive && !lootHint) for (const d of this.drops) if (Math.hypot(d.x - p.x, d.z - p.z, d.y - p.y) < LOOT_RANGE) { lootHint = 'Pressione [X] para pegar munição da mochila'; break; }
     s.end();
 
     if(alive && this.footsteps.advance(-1,p.x,p.y,p.z,now,p.onGround&&this.myVehicleId===-1,p.crouch,p.prone,this.keys.has('ShiftLeft'))) this.sfx.footstep(0,0,this.world.surfaceAt(p.x,p.z)!==Surface.Concrete,p.crouch,this.keys.has('ShiftLeft'));
@@ -624,17 +711,19 @@ class Game {
     this.gs.grass.update(cam.position.x, cam.position.z, now / 1000);
     this.updateMovers(now / 1000);
 
-    this.vehicleRenderer?.update(this.vehicles, dt);
+    const mine = this.vehicles.find((v) => v.id === this.myVehicleId);
+    this.bars.update(pilot && alive, this.vehSteer, mine?.speed ?? 0, (mine?.hp ?? 200) / (VEHICLE_BY_ID[mine?.type ?? 'quad']?.maxHp ?? 200), now / 1000);
     const driving = this.myVehicleId !== -1;
     if (driving) {
-      this.vm.group.visible = false;
-      const myV = this.vehicles.find((v) => v.id === this.myVehicleId);
-      this.ui.setVehicleHud(true, (myV?.speed ?? 0) * 3.6, myV?.hp ?? 200, 200);
+      if (pilot) this.vm.group.visible = false;
+      // o piloto vê velocidade e integridade no painel do guidão; a garupa usa o HUD
+      if (pilot) this.ui.setVehicleHud(false);
+      else this.ui.setVehicleHud(true, (mine?.speed ?? 0) * 3.6, mine?.hp ?? 200, 200);
     } else {
       this.ui.setVehicleHud(false);
     }
 
-    let actionHint = reviveHint;
+    let actionHint = reviveHint ?? lootHint;
     if (!actionHint && alive) {
       if (driving) {
         actionHint = 'Pressione [E] para descer do veículo';
@@ -644,9 +733,9 @@ class Game {
         if (distVendor < 3.8) {
           actionHint = 'Pressione [E] para falar com o Vendedor de Veículos';
         } else {
-          const nearV = this.vehicles.find((v) => v.driverId === -1 && Math.hypot(p.x - v.x, p.z - v.z, p.y - v.y) < 3.0);
+          const nearV = this.vehicles.find((v) => (v.driverId === -1 || (v.passengerId === -1 && v.team === this.myTeam)) && Math.hypot(p.x - v.x, p.z - v.z, p.y - v.y) < 3.0);
           if (nearV) {
-            actionHint = `Pressione [E] para pilotar o ${VEHICLE_BY_ID[nearV.type]?.name ?? 'veículo'}`;
+            actionHint = nearV.driverId === -1 ? `Pressione [E] para pilotar o ${VEHICLE_BY_ID[nearV.type]?.name ?? 'veículo'}` : 'Pressione [E] para subir na garupa';
           }
         }
       }
@@ -687,6 +776,7 @@ class Game {
   // ---------- eventos ----------
   bind() {
     addEventListener('keydown', (e) => {
+      if (this.lootPanel.open) { e.preventDefault(); if (e.code === 'Escape') { this.lootPanel.hide(); this.lockInput(); } return; }
       if (!$('shop').classList.contains('hidden') && this.life === LIFE_ALIVE) { if(e.code==='Escape') {this.ui.closeShop();this.lockInput();} return; }
       if ((e.code === 'Tab' || e.code === 'KeyI') && this.ready && this.life !== LIFE_NONE) {
         e.preventDefault(); if (e.repeat) return;
@@ -720,7 +810,6 @@ class Game {
         if (this.myVehicleId !== -1) {
           this.send({ t: 'dismountVehicle' });
           this.myVehicleId = -1;
-          this.sfx.stopEngine();
         } else {
           const equipment = getEquipmentVendorPos(this.myTeam,this.world);
           if(Math.hypot(this.pred.x-equipment.x,this.pred.y-equipment.y,this.pred.z-equipment.z)<3.8){
@@ -732,7 +821,7 @@ class Game {
             if (this.locked()) document.exitPointerLock();
             this.ui.openVehicleShop();
           } else {
-            const nearV = this.vehicles.find((v) => v.driverId === -1 && Math.hypot(this.pred.x - v.x, this.pred.z - v.z, this.pred.y - v.y) < 3.0);
+            const nearV = this.vehicles.find((v) => (v.driverId === -1 || (v.passengerId === -1 && v.team === this.myTeam)) && Math.hypot(this.pred.x - v.x, this.pred.z - v.z, this.pred.y - v.y) < 3.0);
             if (nearV) {
               this.send({ t: 'mountVehicle', vehicleId: nearV.id });
             }
@@ -744,6 +833,9 @@ class Game {
         if (this.life === LIFE_ALIVE) this.lockInput();
       }
       if (e.code === 'Space' && this.life === LIFE_DOWNED) this.send({ t: 'giveup' });
+      if (e.code === 'KeyX' && this.life === LIFE_ALIVE && this.myVehicleId === -1) {
+        this.send({ t: 'inspectLoot' });
+      }
     });
     addEventListener('keyup', (e) => {
       this.keys.delete(e.code);
@@ -771,7 +863,7 @@ class Game {
     document.addEventListener('pointerlockchange', () => {
       const on = this.locked();
       if (!on) { this.mouseL = this.mouseR = false; this.keys.clear(); }
-      this.ui.show('paused', !on && $('board').classList.contains('hidden') && $('shop').classList.contains('hidden') && this.ready && this.life !== LIFE_NONE && !!this.ws);
+      this.ui.show('paused', !on && !this.lootPanel.open && $('board').classList.contains('hidden') && $('shop').classList.contains('hidden') && this.ready && this.life !== LIFE_NONE && !!this.ws);
     });
     const inventoryTab = (inventory: boolean) => {
       this.ui.show('inventoryContent', inventory); this.ui.show('scoreContent', !inventory);
@@ -812,7 +904,7 @@ const BENCH_GUNS = ITEMS.filter((x) => x.weapon).map((x) => x.idx);
 function runBench() {
   const world = new World(20261112);
   const gs = new GameScene(canvas, world);
-  const soldiers = new Soldiers();
+  const soldiers = new Soldiers(100); // o bench desenha 100; a capacidade padrão é MAX_PLAYERS (60) e estourar faz a GPU descartar o corpo inteiro
   gs.scene.add(soldiers.group);
   const c = world.czCandidates[Number(new URLSearchParams(location.search).get('at')) || 0]; // &at=1 industrial, 2 fazenda, 3 posto
   gs.setZones({ x: c.x, z: c.z, r: 150 }, { x: c.x + 20, z: c.z, r: 30 });
@@ -881,8 +973,14 @@ function runBench() {
       gs.scene.add(holder);
     });
   }
+  // ?bench=1&quad=1: cockpit do quadriciclo em 1ª pessoa · &quad=2: quadriciclo por fora com piloto e garupa sentados
+  const quadMode = Number(bq.get('quad')) || 0;
+  const quadBars = quadMode === 1 ? new Handlebars(gs.camera, TEAM_LOOK[0].jacket) : null;
+  const quadRender = quadMode === 2 ? new VehicleRenderer(gs.scene, world) : null;
+  const quadPos = { x: c.x + 40, z: c.z + 6 };
+  const quadVeh = newVehicle(1, 'quad', quadPos.x, world.heightAt(quadPos.x, quadPos.z), quadPos.z, 0.6, 0);
   const focus = bq.has('bush');
-  const bd = Number(new URLSearchParams(location.search).get('bd')) || 7; // distância da câmera à moita no modo foco
+  const bd =Number(new URLSearchParams(location.search).get('bd')) || 7; // distância da câmera à moita no modo foco
   const bu = [...world.bushes].sort((p, q) => Math.hypot(p.x - c.x, p.z - c.z) - Math.hypot(q.x - c.x, q.z - c.z))[0];
   let last = performance.now(), fps = 60, minFps = 999, frames = 0;
   const loop = (now: number) => {
@@ -901,6 +999,16 @@ function runBench() {
       $('scope').classList.toggle('hidden', !(vmRef.scoped && vmRef.adsAmount > .85));
       gs.camera.fov = BASE_FOV * (1 - (1 - vmZoom) * vmRef.adsAmount);
       gs.camera.updateProjectionMatrix();
+    } else if (quadBars) {
+      const steer = bq.has('steer') ? Number(bq.get('steer')) : Math.sin(t * 0.8) * 0.8, speed = Number(bq.get('speed') ?? 9.7);
+      gs.camera.position.set(quadVeh.x, quadVeh.y + Handlebars.EYE.y, quadVeh.z);
+      gs.camera.rotation.set(-Handlebars.PITCH, quadVeh.yaw, 0, 'YXZ');
+      quadBars.update(true, steer, speed, Number(bq.get('hp') ?? 0.75), t);
+    } else if (quadRender) {
+      const d = Number(bq.get('d')) || 3.6, ca = bq.has('a') ? Number(bq.get('a')) : t * 0.4;
+      gs.camera.position.set(quadVeh.x + Math.cos(ca) * d, quadVeh.y + 1.7, quadVeh.z + Math.sin(ca) * d);
+      gs.camera.lookAt(quadVeh.x, quadVeh.y + 0.9, quadVeh.z);
+      quadRender.update([quadVeh], dt);
     } else if (gunsMode) {
       gs.camera.position.set(gunsAnchor.x, gunsAnchor.y, gunsAnchor.z + (Number(bq.get('d')) || 7.5));
       gs.camera.lookAt(gunsAnchor.x, gunsAnchor.y, gunsAnchor.z);
@@ -922,7 +1030,14 @@ function runBench() {
       pose.yaw = (i % 2 ? -ang : -ang + Math.PI); pose.pitch = Math.sin(t + i) * 0.2;
       pose.crouch = i % 9 === 0; pose.prone = i % 13 === 0; pose.sprint = sp > 5; pose.downed = i % 23 === 0; pose.team = i % 3; pose.armor = i % 5; pose.helmet = (i * 3) % 5; pose.pack = i % 4; pose.gun = BENCH_GUNS[i % BENCH_GUNS.length];
       pose.marker = i % 3 === 0 ? 1 : i % 17 === 0 ? 2 : 0;
-      pose.camo = 0;
+      pose.camo = 0; pose.seat = 0;
+      if (quadRender && i < 2) {
+        // piloto e garupa sentados no quadriciclo parado
+        pose.x = quadVeh.x; pose.y = quadVeh.y; pose.z = quadVeh.z; pose.seat = i + 1;
+        pose.seatYaw = quadVeh.yaw; pose.seatPitch = quadVeh.pitch; pose.seatRoll = quadVeh.roll;
+        pose.yaw = quadVeh.yaw + (i === 1 ? Math.sin(t * 0.7) * 1.2 : 0); pose.pitch = 0;
+        pose.crouch = pose.prone = pose.sprint = pose.downed = false; pose.marker = 0; pose.team = 0; pose.pack = i === 0 ? 2 : 3;
+      } else if (quadMode) { pose.x += 500; }
       if (focus && i < 3) {
         const ox = i === 0 ? -0.3 : i === 1 ? 0.5 : 3.2, oz = i === 0 ? 0.2 : i === 1 ? -0.6 : 0.5;
         pose.x = bu.x + ox; pose.z = bu.z + oz; pose.y = bu.y; pose.yaw = Math.PI / 2 + 0.3;

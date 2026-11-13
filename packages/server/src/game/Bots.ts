@@ -1,6 +1,7 @@
 import {
-  BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD, BTN2_USE, BTN3_FOB, BTN_CROUCH, BTN_FIRE, BTN_FWD, BTN_JUMP,
-  BTN_LEFT, BTN_RIGHT, BTN_SPRINT, BTN3_PRONE, WORLD_SIZE, eyeHeight, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, PRESETS, buildLoadout,
+  BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD, BTN2_SECONDARY, BTN2_USE, BTN3_FOB, BTN_CROUCH, BTN_FIRE, BTN_FWD, BTN_JUMP,
+  BTN_LEFT, BTN_RIGHT, BTN_SPRINT, BTN_BACK, BTN3_PRONE, WORLD_SIZE, eyeHeight, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, PRESETS, buildLoadout,
+  VEHICLE_BY_ID, getVendorPos, type VehicleState,
 } from '@warbit/shared';
 import type { Match } from './Match';
 import type { Player } from './Player';
@@ -47,10 +48,20 @@ export class BotBrain {
   markAt = 0; fobAt = 0; buildAt = 0; proneUntil = 0;
   lookYaw = 0;
   seq = 0;
+  /** 3 bots por time (os primeiros) vão de quadriciclo até a Hot Zone */
+  /** 3 bots por time vão de quadriciclo: 2 compram e pilotam, 1 vai de garupa */
+  readonly rider: boolean;
+  readonly buyer: boolean;
+  spawnedAt = 0;
+  rideStart = 0; reverseUntil = 0; rideStuckX = 0; rideStuckZ = 0; rideStuckAt = 0;
   hotPref = Math.random();
   hasFinal = false; finalX = 0; finalZ = 0; // destino final enquanto vai por um ponto de flanco
 
-  constructor(readonly id: number) {}
+  constructor(readonly id: number) {
+    const slot = Math.floor(id / 3);
+    this.rider = slot < 3;
+    this.buyer = slot === 0 || slot === 2;
+  }
 
   // ---------- compra ----------
   private trySpawn(m: Match, p: Player) {
@@ -63,7 +74,7 @@ export class BotBrain {
       if (r.loadout.cost > 0 && p.cash - r.loadout.cost < 400 && items !== tries[3]) continue;
       if (!m.spawn(p, items)) {
         this.aimYaw = p.yaw; this.aimPitch = 0; this.targetId = -1; this.goalUntil = 0; this.reviveId = -1; this.holding = false; this.hasFinal = false;
-        this.stuckX = p.ms.x; this.stuckZ = p.ms.z; this.stuckAt = m.tick;
+        this.stuckX = p.ms.x; this.stuckZ = p.ms.z; this.stuckAt = m.tick; this.spawnedAt = m.tick;
         return;
       }
       break;
@@ -97,7 +108,7 @@ export class BotBrain {
     const r2 = range * range;
     const alerted = m.tick - p.lastDamageTick < 45;
     const cur = this.targetId >= 0 ? m.players[this.targetId] : null;
-    if (cur && cur.life === LIFE_ALIVE && (cur.ms.x - p.ms.x) ** 2 + (cur.ms.z - p.ms.z) ** 2 < r2 && this.canSpot(m, p, cur, true)) {
+    if (cur && cur.team !== p.team && cur.life === LIFE_ALIVE && (cur.ms.x - p.ms.x) ** 2 + (cur.ms.z - p.ms.z) ** 2 < r2 && this.canSpot(m, p, cur, true)) {
       this.lastSeenAt = m.tick;
       return;
     }
@@ -118,7 +129,8 @@ export class BotBrain {
     }
     cand.sort((a, b) => a.d - b.d);
     this.targetId = -1;
-    for (let i = 0; i < Math.min(4, cand.length); i++) {
+    // Inimigos próximos atrás de paredes não podem ocultar outros alvos visíveis.
+    for (let i = 0; i < cand.length; i++) {
       if (this.canSpot(m, p, cand[i].e, alerted)) { this.setTarget(m, cand[i].e); return; }
     }
   }
@@ -161,8 +173,16 @@ export class BotBrain {
 
   private pickGoal(m: Match, p: Player) {
     const tick = m.tick;
+    if (this.hotPref < .75 && !this.hasFinal && Math.hypot(this.goalX - m.hz.x, this.goalZ - m.hz.z) > m.hz.r * .8) this.goalUntil = 0;
     if (this.pickRevive(m, p)) return;
     this.reviveId = -1;
+    // sem munição nenhuma: recua até a FOB do time (ou a base) para reabastecer
+    if (this.outOfAmmo(p)) {
+      const f = m.fobs[p.team], b = m.world.bases[p.team];
+      this.goalX = f ? f.x + 3 : b.x; this.goalZ = f ? f.z + 3 : b.z;
+      this.goalUntil = tick + 60; this.holding = false; this.hasFinal = false;
+      return;
+    }
     // indo por um ponto de flanco: chegou (ou demorou demais)? segue para o destino final
     if (this.hasFinal) {
       const near = (this.goalX - p.ms.x) ** 2 + (this.goalZ - p.ms.z) ** 2 < 100;
@@ -186,10 +206,14 @@ export class BotBrain {
       const score = wantHot ? dh + Math.random() * 25 : db * 0.4 + Math.abs(Math.hypot(c.x - cz.x, c.z - cz.z) - cz.r * 0.55) + Math.random() * 30;
       if (score < bestScore) { bestScore = score; best = c; }
     }
-    if (!best) {
-      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * (wantHot ? hz.r : cz.r) * 0.8;
+    if (!best || (wantHot && Math.hypot(best.x - hz.x, best.z - hz.z) > hz.r * .8)) {
       const c = wantHot ? hz : cz;
-      best = { x: c.x + Math.cos(a) * r, z: c.z + Math.sin(a) * r };
+      for (let i = 0; i < 32; i++) {
+        const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * c.r * .8;
+        const candidate = { x: c.x + Math.cos(a) * r, z: c.z + Math.sin(a) * r };
+        if (!m.world.blockedAt(candidate.x, candidate.z)) { best = candidate; break; }
+      }
+      best ??= { x: c.x, z: c.z };
     }
     this.holding = false;
     // Quem está longe da zona contorna: passa antes por um ponto de flanco num lado aleatório,
@@ -209,6 +233,10 @@ export class BotBrain {
     }
   }
 
+  private outOfAmmo(p: Player): boolean {
+    return p.ammo[0] === 0 && p.reserve[0] === 0 && p.ammo[1] === 0 && p.reserve[1] === 0;
+  }
+
   // ---------- navegação ----------
   /** desvia de obstáculos testando raios na altura do joelho */
   private steerAround(m: Match, p: Player, yaw: number): number {
@@ -220,6 +248,83 @@ export class BotBrain {
     return yaw + Math.PI;
   }
 
+  // ---------- quadriciclo ----------
+  private send(m: Match, p: Player, buttons: number, yaw: number, pitch = 0) {
+    this.aimYaw = yaw; this.aimPitch = pitch;
+    m.processInput(p, { seq: ++this.seq, buttons, buttons2: 0, buttons3: 0, yaw, pitch, renderTick: m.tick });
+  }
+
+  /** Bots "rider": pegam um quadriciclo na base e vão até a Hot Zone. Devolve true quando o bot está ocupado com isso. */
+  private rideVehicle(m: Match, p: Player): boolean {
+    const tick = m.tick;
+    if (p.vehicleId !== -1) {
+      const v = m.vehicles.get(p.vehicleId);
+      if (!v) { p.vehicleId = -1; return false; }
+      if (v.driverId !== p.id) { this.send(m, p, 0, v.yaw); return true; } // garupa: só segue viagem
+      if (v.passengerId === -1 && tick - this.rideStart < 30 * 8 && m.players.some((q) => q.bot && q.team === p.team && q.life === LIFE_ALIVE && q.vehicleId === -1
+        && q.brain?.rider && !q.brain.buyer && Math.hypot(q.ms.x - v.x, q.ms.z - v.z) < 60)) { this.send(m, p, BTN_JUMP, v.yaw); return true; }
+      const hz = m.hz, d = Math.hypot(hz.x - v.x, hz.z - v.z);
+      if (d < 65 || tick - this.rideStart > 30 * 70) { m.dismountPlayer(p); this.goalUntil = 0; this.nextThink = 0; return false; }
+      const want = yawTo(hz.x - v.x, hz.z - v.z);
+      const free = (a: number, len: number) => m.world.raycast(v.x, v.y + 0.8, v.z, -Math.sin(a), 0, -Math.cos(a), len) >= len - 0.05;
+      let target = want;
+      if (!free(want, 12)) for (const o of [0.5, -0.5, 1, -1, 1.6, -1.6]) if (free(want + o, 12)) { target = want + o; break; }
+      if (tick - this.rideStuckAt >= 30) {
+        if (Math.hypot(v.x - this.rideStuckX, v.z - this.rideStuckZ) < 2.5 && tick >= this.reverseUntil) this.reverseUntil = tick + 40;
+        this.rideStuckX = v.x; this.rideStuckZ = v.z; this.rideStuckAt = tick;
+      }
+      const diff = angDiff(target, v.yaw);
+      let b = diff > 0.08 ? BTN_LEFT : diff < -0.08 ? BTN_RIGHT : 0;
+      if (tick < this.reverseUntil) b = BTN_BACK | (diff > 0 ? BTN_RIGHT : BTN_LEFT);
+      else b |= BTN_FWD;
+      this.send(m, p, b, v.yaw);
+      return true;
+    }
+    if (!this.rider || m.phase === 'end' || tick - this.spawnedAt > 30 * 25) return false; // demorou: vai a pé
+    const base = m.world.bases[p.team];
+    if (Math.hypot(p.ms.x - base.x, p.ms.z - base.z) > 75) return false;
+    const walkTo = (x: number, z: number) => {
+      const d = Math.hypot(x - p.ms.x, z - p.ms.z);
+      this.send(m, p, BTN_FWD | (d > 12 ? BTN_SPRINT : 0), this.steerAround(m, p, yawTo(x - p.ms.x, z - p.ms.z)));
+    };
+    const board = (v: VehicleState) => {
+      if (Math.hypot(v.x - p.ms.x, v.z - p.ms.z) < 2.6) {
+        if (m.mountVehicle(p, v)) { this.rideStart = tick; this.rideStuckAt = tick; this.rideStuckX = v.x; this.rideStuckZ = v.z; }
+      } else walkTo(v.x, v.z);
+      return true;
+    };
+    let best: VehicleState | null = null, bd = 60;
+    if (!this.buyer) {
+      // garupa: sobe atrás de um bot do time que já comprou; enquanto ninguém comprou, espera na base
+      for (const v of m.vehicles.values()) {
+        if (v.team !== p.team || v.driverId === -1 || v.passengerId !== -1 || !m.players[v.driverId]?.bot) continue;
+        const d = Math.hypot(v.x - p.ms.x, v.z - p.ms.z);
+        if (d < bd) { bd = d; best = v; }
+      }
+      if (best) return board(best);
+      const anyBuyer = m.players.some((q) => q.bot && q.team === p.team && q.life === LIFE_ALIVE && q.brain?.buyer && q.vehicleId === -1 && Math.hypot(q.ms.x - base.x, q.ms.z - base.z) < 75);
+      if (!anyBuyer) return false;
+      this.send(m, p, 0, this.aimYaw);
+      return true;
+    }
+    // comprador: aproveita um quadriciclo do time parado sem piloto; senão compra o seu
+    for (const v of m.vehicles.values()) {
+      if (v.team !== p.team || v.driverId !== -1) continue;
+      const d = Math.hypot(v.x - p.ms.x, v.z - p.ms.z);
+      if (d < bd) { bd = d; best = v; }
+    }
+    if (best) return board(best);
+    const price = VEHICLE_BY_ID.quad.price;
+    let teamVehicles = 0;
+    for (const v of m.vehicles.values()) if (v.team === p.team) teamVehicles++;
+    if (p.cash < price + 300 || teamVehicles >= 6) return false;
+    const vendor = getVendorPos(p.team, m.world);
+    if (Math.hypot(vendor.x - p.ms.x, vendor.z - p.ms.z) > 18) { walkTo(vendor.x, vendor.z); return true; }
+    if (m.buyVehicle(p, 'quad') !== null) { this.spawnedAt = -99999; return false; }
+    this.rideStart = tick; this.rideStuckAt = tick; this.rideStuckX = p.ms.x; this.rideStuckZ = p.ms.z;
+    return true;
+  }
+
   // ---------- decisão por tick ----------
   think(m: Match, p: Player) {
     const tick = m.tick;
@@ -229,6 +334,8 @@ export class BotBrain {
     }
     if (p.life !== LIFE_ALIVE || !p.loadout) return;
 
+    if (this.rideVehicle(m, p)) return;
+
     if (tick >= this.nextThink) {
       this.nextThink = tick + 8 + (this.id % 5);
       this.pickTarget(m, p);
@@ -236,8 +343,11 @@ export class BotBrain {
     }
 
     let buttons = 0, b2 = 0, b3 = 0;
-    const w = (p.slot === 0 ? p.loadout.primary : p.loadout.secondary).weapon!;
-    const tgt = this.targetId >= 0 ? m.players[this.targetId] : null;
+    // acabou a munição da arma principal: saca a secundária; sem nenhuma, larga o combate e vai reabastecer
+    const dry = this.outOfAmmo(p);
+    if (p.ammo[0] === 0 && p.reserve[0] === 0 && !dry) b2 |= BTN2_SECONDARY;
+    const w = (b2 & BTN2_SECONDARY ? p.loadout.secondary : p.loadout.primary).weapon!;
+    const tgt = this.targetId >= 0 && !dry ? m.players[this.targetId] : null;
     let wantYaw: number, wantPitch = 0;
     const turn = 4.5 / 30;
     const reviving = this.reviveId >= 0 && m.players[this.reviveId].life === LIFE_DOWNED;
@@ -251,18 +361,22 @@ export class BotBrain {
       const dy = tgt.ms.y + (tgt.ms.prone ? 0.3 : tgt.ms.crouch ? 0.8 : 1.15) - this.eye(p);
       if (tick >= this.nextErr) {
         this.nextErr = tick + 10 + Math.floor(Math.random() * 8);
-        const e = 0.008 + (1 - this.skill) * 0.035 + Math.min(0.03, tgtDist / 6000);
+        const e = 0.004 + (1 - this.skill) * 0.02 + Math.min(0.012, tgtDist / 10000);
         this.errYaw = gauss() * e; this.errPitch = gauss() * e * 0.6;
       }
       wantYaw = yawTo(dx, dz) + this.errYaw;
       wantPitch = Math.atan2(dy, tgtDist) + this.errPitch;
       const dyaw = angDiff(wantYaw, this.aimYaw);
       const reaction = 10 + (1 - this.skill) * 22;
-      if (tick - this.seenAt > reaction && Math.abs(dyaw) < 0.06 && tick - this.lastSeenAt < 12) {
-        if (w.auto) { if ((tick + this.id) % 24 < 10) buttons |= BTN_FIRE; }
-        else if (tick % 3 === 0) buttons |= BTN_FIRE;
+      // rajadas: para, firma a mira e atira; só se mexe entre uma rajada e outra (andando o tiro abre demais)
+      const phase = (tick + this.id * 7) % 26;
+      const settle = phase < 16 && tgtDist > 12;
+      const inRange = tgtDist < (w.cls === 'sniper' ? 330 : Math.max(60, w.falloffEnd));
+      if (inRange && tick - this.seenAt > reaction && Math.abs(dyaw) < 0.06 && tick - this.lastSeenAt < 14) {
+        if (w.auto) { if (phase >= 3 && phase < 16) buttons |= BTN_FIRE; }
+        else if (tick % 3 === 0 && (phase >= 3 || tgtDist <= 12)) buttons |= BTN_FIRE;
       }
-      if (tgtDist > 18) b2 |= BTN2_ADS;
+      if (tgtDist > 5) b2 |= BTN2_ADS;
       const prefer = w.cls === 'sniper' ? 160 : w.cls === 'smg' || w.cls === 'shotgun' ? 20 : 55;
       if (tick >= this.strafeUntil) {
         this.strafe = Math.random() < 0.5 ? 1 : -1;
@@ -271,8 +385,9 @@ export class BotBrain {
       }
       if (this.holding && tgtDist > 70 && tick >= this.proneUntil && Math.random() < 0.01) this.proneUntil = tick + 150;
       if (this.holding && tgtDist > 25) buttons |= BTN_CROUCH; // segura a posição atrás da cobertura
-      else if (tgtDist > prefer * 1.6) buttons |= BTN_FWD;
       else if (tick < this.crouchUntil) buttons |= BTN_CROUCH;
+      else if (settle && inRange) { /* parado, firmando a mira */ }
+      else if (tgtDist > prefer * 1.6) buttons |= BTN_FWD;
       else buttons |= this.strafe > 0 ? BTN_RIGHT : BTN_LEFT;
       if (p.hasMark && tick >= this.markAt && Math.abs(dyaw) < 0.04) { b2 |= BTN2_MARK; this.markAt = tick + 300; }
       if (p.frags > 0 && tgtDist > 12 && tgtDist < 32 && Math.random() < 0.004) b2 |= BTN2_NADE;
@@ -322,7 +437,7 @@ export class BotBrain {
         if (p.builds > 0 && tick >= this.buildAt) { b2 |= BTN2_BUILD; this.buildAt = tick + 90 + Math.floor(Math.random() * 120); }
       }
       // recarrega quando está tranquilo
-      if (p.ammo[p.slot] < w.mag * 0.5 && p.reserve[p.slot] > 0 && tick - this.lastSeenAt > 45) b2 |= BTN2_RELOAD;
+      if (!(b2 & BTN2_SECONDARY) && p.ammo[0] < w.mag * 0.5 && p.reserve[0] > 0 && tick - this.lastSeenAt > 45) b2 |= BTN2_RELOAD;
       // anti-travamento
       if (tick - this.stuckAt >= 25) {
         const moved = Math.hypot(p.ms.x - this.stuckX, p.ms.z - this.stuckZ);

@@ -157,6 +157,14 @@ interface VehicleMeshGroup {
   handlebar: THREE.Group;
   wheels: THREE.Mesh[]; // FL, FR, RL, RR
   wheelSpin: number;
+  /** posição/rotação desenhada: persegue o estado do servidor (que chega 5x por segundo) sem trancos */
+  dx: number; dy: number; dz: number; dyaw: number; init: boolean;
+}
+
+function lerpAng(a: number, b: number, t: number) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2; else if (d < -Math.PI) d += Math.PI * 2;
+  return a + d * t;
 }
 
 export class VehicleRenderer {
@@ -235,10 +243,11 @@ export class VehicleRenderer {
     }
 
     this.group.add(g);
-    return { group: g, handlebar: hbGroup, wheels, wheelSpin: 0 };
+    return { group: g, handlebar: hbGroup, wheels, wheelSpin: 0, dx: 0, dy: 0, dz: 0, dyaw: 0, init: false };
   }
 
-  update(vehicles: VehicleState[], dt: number) {
+  /** `own`: veículo que eu piloto, desenhado na posição suavizada da câmera e sem o guidão (ele aparece em 1ª pessoa). */
+  update(vehicles: VehicleState[], dt: number, own?: { id: number; x: number; y: number; z: number; yaw: number }) {
     const seen = new Set<number>();
 
     for (const v of vehicles) {
@@ -250,8 +259,17 @@ export class VehicleRenderer {
       }
 
       // Posição e rotação básica (com pitch e roll para abraçar o terreno)
-      vm.group.position.set(v.x, v.y, v.z);
-      vm.group.rotation.set(v.pitch, v.yaw, v.roll, 'YXZ');
+      const mine = own?.id === v.id;
+      if (mine) { vm.dx = own!.x; vm.dy = own!.y; vm.dz = own!.z; vm.dyaw = own!.yaw; }
+      else if (!vm.init || Math.hypot(v.x - vm.dx, v.z - vm.dz) > 8) { vm.dx = v.x; vm.dy = v.y; vm.dz = v.z; vm.dyaw = v.yaw; }
+      else {
+        const k = 1 - Math.exp(-dt * 10);
+        vm.dx += (v.x - vm.dx) * k; vm.dy += (v.y - vm.dy) * k; vm.dz += (v.z - vm.dz) * k; vm.dyaw = lerpAng(vm.dyaw, v.yaw, k);
+      }
+      vm.init = true;
+      vm.group.position.set(vm.dx, vm.dy, vm.dz);
+      vm.group.rotation.set(v.pitch, vm.dyaw, v.roll, 'YXZ');
+      vm.group.visible = !mine; // o piloto vê o cockpit em 1ª pessoa (render/handlebars.ts), não o modelo externo
 
       // Guidão vira com a direção
       vm.handlebar.rotation.y = -v.steer * 0.45;
@@ -277,6 +295,12 @@ export class VehicleRenderer {
         this.vMeshes.delete(id);
       }
     }
+  }
+
+  /** onde o veículo está sendo desenhado (os soldados montados sentam aí) */
+  display(id: number) {
+    const vm = this.vMeshes.get(id);
+    return vm?.init ? vm.group : null;
   }
 
   remove(id: number) {

@@ -21,8 +21,8 @@ export interface VehicleDef {
 export const VEHICLES: VehicleDef[] = [
   {
     id: 'quad',
-    name: 'Quadriciclo 4x4 Tático',
-    description: 'Veículo off-road leve e veloz para 1 tripulante. Saia da base em disparada e alcance o front em segundos.',
+    name: 'Quadriciclo Tático',
+    description: 'Quadriciclo leve e veloz para 2 pessoas: um pilota e o outro vai de garupa. Saia da base em disparada e alcance o front em segundos.',
     price: 1200,
     maxHp: 200,
     topSpeed: 17.5,
@@ -97,6 +97,7 @@ export interface VehicleState {
   steer: number;
   hp: number;
   driverId: number; // -1 quando vazio
+  passengerId: number; // garupa; -1 quando vazio
   team: number;
 }
 
@@ -115,6 +116,7 @@ export function newVehicle(id: number, type: string, x: number, y: number, z: nu
     steer: 0,
     hp: def.maxHp,
     driverId: -1,
+    passengerId: -1,
     team,
   };
 }

@@ -7,6 +7,7 @@ it('preserva o tipo e o valor confirmado da recompensa no JSON', () => {
   expect(decoded).toEqual(message);
 });
 import {
+  BUSH_HEIGHT_MAX, BUSH_HEIGHT_MIN, BUSH_RADIUS_MAX, BUSH_RADIUS_MIN, PLAYER_HEIGHT,
   BTN3_PRONE, BTN_FWD, BTN_JUMP, BTN_SPRINT, DT, ITEM_BY_ID, LIFE_ALIVE, World, buildLoadout, computePresence, controllingTeam, decodeInput,
   decodeSnapshot, encodeInput, encodeSnapshot, levelFromXp, newMoveState, pointsFor, priceFor, rewardFor, stepMove, whereIs, xpForLevel,
   SCORE_PER_PRESENCE_SECOND, ALIVE_MASK_BYTES, maskHas, maskSet,
@@ -32,7 +33,7 @@ describe('mundo', () => {
     expect(world.boxes.length).toBeGreaterThan(200);
   });
   it('mantém ruas e calçadas livres de moitas', () => {
-    expect(world.streets).toHaveLength(12);
+    expect(world.streets).toHaveLength(8);
     for (const s of world.streets) {
       expect(world.bushes.some(b => b.x + b.r > s.x0 - 1.2 && b.x - b.r < s.x1 + 1.2 && b.z + b.r > s.z0 - 1.2 && b.z - b.r < s.z1 + 1.2)).toBe(false);
     }
@@ -205,7 +206,7 @@ describe('moitas', () => {
   it('têm tamanho para esconder um soldado e dá para entrar nelas', () => {
     expect(world.bushes.length).toBeGreaterThan(300);
     const b = world.bushes[0];
-    expect(world.bushes.every(b => b.r >= 1.0 && b.r <= 1.6 && b.h >= 1.2 && b.h <= 1.8)).toBe(true);
+    expect(world.bushes.every(b => b.r >= BUSH_RADIUS_MIN && b.r <= BUSH_RADIUS_MAX && b.h >= BUSH_HEIGHT_MIN && b.h <= BUSH_HEIGHT_MAX && b.h < PLAYER_HEIGHT)).toBe(true); // menor que o soldado em pé
     expect(world.inBush(b.x, b.z)).toBe(b);
     expect(world.inBush(b.x + b.r * 2, b.z)).not.toBe(b);
     // sem colisão: o jogador atravessa a moita

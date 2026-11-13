@@ -13,13 +13,17 @@ export const TEAM_CSS = ['#3b82f6', '#ef4444', '#22c55e'] as const;
 
 // Mundo
 export const WORLD_SIZE = 1500;
-export const BUSH_RADIUS_MIN = 1.0;
-export const BUSH_RADIUS_MAX = 1.6;
-export const BUSH_HEIGHT_MIN = 1.2;
-export const BUSH_HEIGHT_MAX = 1.8;
-export const CZ_RADIUS = 150; // Control Zone
+export const CZ_BALANCE_MAX_SPREAD = 0.15;
+export const CZ_CENTER_JITTER = 90;
+// moita menor que um soldado em pé (1,8 m): no máximo ~2 m de largura e 1,4 m de altura
+export const BUSH_RADIUS_MIN = 0.7;
+export const BUSH_RADIUS_MAX = 1.0;
+export const BUSH_HEIGHT_MIN = 0.95;
+export const BUSH_HEIGHT_MAX = 1.4;
+export const CZ_RADIUS = 230; // Control Zone
 export const HZ_RADIUS = 30; // Hot Zone
 export const HZ_MOVE_SECONDS = 120;
+export const HZ_DRIFT_SPEED = 1.5; // m/s: a Hot Zone desliza devagar pela Control Zone
 
 // Pontuação
 export const SCORE_TO_WIN = 100;
@@ -57,7 +61,10 @@ export const FOB_RADIUS = 10; // raio de reabastecimento
 export const FOB_MIN_BASE_DIST = 160;
 
 // Vida / morte
-export const DOWNED_SECONDS = 20; // tempo caído esperando médico
+export const DOWNED_SECONDS = 300; // 5 min caído no chão esperando médico (o corpo fica lá; Espaço desiste)
+export const BOT_RESPAWN_MAX_IN_ZONE = 3; // bot caído nasce de novo na hora se o time dele tem só isto (ou menos) na Control Zone
+export const LOOT_RANGE = 2.6;
+export const BACKPACK_SECONDS = 120; // a mochila que sobra de quem renasceu some depois de 2 min
 export const REVIVE_RANGE = 2.6;
 export const REVIVE_SECONDS = 3; // reanimador de campo
 export const DEFIB_SECONDS = 1; // desfibrilador

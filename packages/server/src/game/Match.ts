@@ -1,9 +1,10 @@
+import { BACKPACK_SECONDS, BOT_RESPAWN_MAX_IN_ZONE, LOOT_RANGE, type Magazine } from '@warbit/shared';
 import { BOT_RESPAWN_SECONDS, cargoCapacity, loadoutIds, getEquipmentVendorPos, MAGAZINE_PRICE, ITEM_BY_ID, priceFor } from '@warbit/shared';
 import {
   ALIVE_MASK_BYTES, ARMOR_REDUCTION, BASE_MAGS, BOT_START_CASH, BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD,
   BTN2_SECONDARY, BTN2_USE, BTN3_FOB, BTN_FIRE, BTN_SPRINT, BUILD_USES, BoxKind, CROUCH_HEIGHT, CZ_RADIUS, DEFIB_SECONDS,
   DOWNED_SECONDS, DT, FAR_SNAPSHOT_EVERY, FOB_HP, FOB_MIN_BASE_DIST, FOB_RADIUS, FRAG_COUNT, HP_REGEN_CAP, HP_REGEN_DELAY,
-  HP_REGEN_RATE, HZ_MOVE_SECONDS, HZ_RADIUS, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, MATCH_END_SECONDS, MAX_HP, MAX_PLAYERS, MEDBAG_USES,
+  HP_REGEN_RATE, HZ_DRIFT_SPEED, HZ_MOVE_SECONDS, HZ_RADIUS, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, MATCH_END_SECONDS, MAX_HP, MAX_PLAYERS, MEDBAG_USES,
   NADE_DAMAGE, NADE_FUSE, NADE_RADIUS, NADE_SPEED, NEAR_DIST, PLAYER_HEIGHT, PLAYER_RADIUS, PRESENCE_REWARD_SECONDS, RESPAWN_SECONDS,
   REVIVE_RANGE, REVIVE_SECONDS, SCORE_TO_WIN, SNAPSHOT_EVERY, SPRINT_FLAG_SPEED, TEAM_COUNT, TEAM_NAMES, TICK_RATE, WARMUP_SECONDS,
   aimDir, buildLoadout, computePresence, encodeSnapshot, eyeHeight, maskSet, newMoveState, pointsFor, rewardFor, stepMove, stepNade, whereIs,
@@ -13,6 +14,7 @@ import {
 } from '@warbit/shared';
 import type { ProfileStore } from '../db';
 import { BotBrain, botName } from './Bots';
+import { chooseControlZone } from './zones';
 import { HIST, Player, type Conn } from './Player';
 
 const v3 = { x: 0, y: 0, z: 0 };
@@ -47,6 +49,9 @@ function raySphere(ox: number, oy: number, oz: number, dx: number, dy: number, d
   return t >= 0 ? t : c < 0 ? 0 : -1;
 }
 
+/** Mochila que sobra no chão quando o jogador desiste/morre: carregadores para lootear, some em BACKPACK_SECONDS. */
+export interface Drop { id: number; x: number; y: number; z: number; mags: Magazine[]; expireAt: number }
+
 export interface Fob { team: number; x: number; z: number; y: number; hp: number; ids: number[]; owner: number }
 
 const COVER_KINDS: number[] = [BoxKind.House, BoxKind.Wall, BoxKind.Crate, BoxKind.Container, BoxKind.Building, BoxKind.Rock, BoxKind.Fence];
@@ -66,6 +71,8 @@ export class Match {
   nades: Nade[] = [];
   sandbags: number[] = [];
   fobs: (Fob | null)[] = [null, null, null];
+  drops: Drop[] = [];
+  private nextDrop = 1;
   readonly vehicles = new Map<number, VehicleState>();
   private nextVehicleId = 1;
   private vehicleSyncTick = 0;
@@ -99,13 +106,25 @@ export class Match {
   sendVehicles() {
     this.broadcast({ t: 'vehicles', list: this.vehicleList() });
   }
+  /** O veículo onde o jogador está sentado, pelo assento (não confia só em p.vehicleId). */
+  private seatOf(p: Player): VehicleState | undefined {
+    const byId = p.vehicleId !== -1 ? this.vehicles.get(p.vehicleId) : undefined;
+    if (byId && (byId.driverId === p.id || byId.passengerId === p.id)) return byId;
+    for (const v of this.vehicles.values()) if (v.driverId === p.id || v.passengerId === p.id) return v;
+    return undefined;
+  }
+  /** Tira o jogador do veículo. Também limpa assento "fantasma": quando um humano entra na vaga de um bot que
+   *  estava pilotando, o veículo continuava com aquele id como piloto e o cliente ficava preso nele. */
   dismountPlayer(p: Player) {
-    if (p.vehicleId === -1) return;
-    const veh = this.vehicles.get(p.vehicleId);
-    if (veh && veh.driverId === p.id) {
-      veh.driverId = -1;
-      const sideX = veh.x + Math.cos(veh.yaw) * 1.5;
-      const sideZ = veh.z - Math.sin(veh.yaw) * 1.5;
+    const veh = this.seatOf(p);
+    if (!veh) { if (p.vehicleId !== -1) { p.vehicleId = -1; this.sendVehicles(); } return; }
+    {
+      const wasDriver = veh.driverId === p.id;
+      if (wasDriver) { veh.driverId = veh.passengerId; veh.passengerId = -1; } // a garupa assume o guidão
+      else veh.passengerId = -1;
+      const side = wasDriver ? 1.5 : -1.5;
+      const sideX = veh.x + Math.cos(veh.yaw) * side;
+      const sideZ = veh.z - Math.sin(veh.yaw) * side;
       const gy = this.world.groundAt(sideX, sideZ, veh.y + 0.2, PLAYER_RADIUS);
       p.ms.x = sideX; p.ms.z = sideZ; p.ms.y = gy;
       p.ms.vx = 0; p.ms.vz = 0;
@@ -118,15 +137,56 @@ export class Match {
     if (!v) return;
     this.broadcast({ t: 'vehicleBoom', id: v.id, x: v.x, y: v.y, z: v.z });
     this.broadcast({ t: 'boom', x: v.x, y: v.y, z: v.z });
-    if (v.driverId !== -1) {
-      const driver = this.players[v.driverId];
-      if (driver && driver.life === LIFE_ALIVE) {
-        driver.vehicleId = -1;
-        this.damage(driver, 80, null, 'Explosão do veículo', false);
+    for (const pid of [v.driverId, v.passengerId]) {
+      if (pid === -1) continue;
+      const rider = this.players[pid];
+      if (rider && rider.life === LIFE_ALIVE) {
+        rider.vehicleId = -1;
+        this.damage(rider, 80, null, 'Explosão do veículo', false);
       }
     }
     this.vehicles.delete(id);
     this.sendVehicles();
+  }
+  /** Vaga de piloto livre (qualquer time) ou garupa livre (só do mesmo time). */
+  mountVehicle(p: Player, veh: VehicleState): 'driver' | 'passenger' | null {
+    if (p.life !== LIFE_ALIVE || p.vehicleId !== -1) return null;
+    let seat: 'driver' | 'passenger';
+    if (veh.driverId === -1) { veh.driverId = p.id; seat = 'driver'; }
+    else if (veh.passengerId === -1 && veh.team === p.team) { veh.passengerId = p.id; seat = 'passenger'; }
+    else return null;
+    p.vehicleId = veh.id;
+    p.ms.x = veh.x; p.ms.y = veh.y; p.ms.z = veh.z;
+    p.yaw = veh.yaw;
+    p.ms.vx = 0; p.ms.vy = 0; p.ms.vz = 0;
+    p.prevB2 |= BTN2_USE; // o E que montou ainda está apertado: não pode contar como "descer" no próximo input
+    p.reloadEnd = 0;
+    this.sendVehicles();
+    return seat;
+  }
+  /** Compra no vendedor da base: o veículo nasce na vaga e o comprador já sai pilotando. */
+  buyVehicle(p: Player, vType: string): string | null {
+    if (p.life !== LIFE_ALIVE) return 'Você precisa estar em campo';
+    const def = VEHICLE_BY_ID[vType];
+    if (!def || def.soon) return 'Veículo indisponível no momento';
+    const vPos = getVendorPos(p.team, this.world);
+    if (Math.hypot(p.ms.x - vPos.x, p.ms.z - vPos.z) > 25) return 'Vá até o vendedor de veículos da base para comprar!';
+    if (p.cash < def.price) return `Saldo insuficiente! Custa $${def.price.toLocaleString('pt-BR')}`;
+    this.dismountPlayer(p);
+    p.cash -= def.price;
+    this.sendTo(p, { t: 'purchase', amount: def.price, kind: 'vehicle' });
+    p.profileDirty = true; p.saveDirty = true;
+    if (p.conn) this.sendProfile(p);
+    const sp = getVehicleSpawnPos(p.team, this.world);
+    // vaga ocupada por outro veículo parado: encosta ao lado
+    let x = sp.x;
+    const z = sp.z;
+    for (let k = 0; k < 6 && [...this.vehicles.values()].some((v) => Math.hypot(v.x - x, v.z - z) < 3); k++) x = sp.x + (k % 2 ? 1 : -1) * 3.5 * Math.ceil((k + 1) / 2);
+    const veh = newVehicle(this.nextVehicleId++, vType, x, this.world.groundAt(x, z, sp.y + 0.5, def.radius), z, sp.yaw, p.team);
+    this.vehicles.set(veh.id, veh);
+    this.mountVehicle(p, veh);
+    p.prevB2 = 0;
+    return null;
   }
   whereOf(p: Player): ZoneWhere {
     return p.life === LIFE_NONE ? 'out' : whereIs(p.ms.x, p.ms.z, this.cz, this.hz);
@@ -138,6 +198,7 @@ export class Match {
   private toolsMsg(p: Player) { return { frag: p.frags, medbag: p.medbags, build: p.builds, fob: p.hasFob ? 1 : 0 }; }
 
   private resetAsBot(p: Player) {
+    this.dismountPlayer(p);
     p.bot = true; p.conn = null; p.profile = null;
     p.name = botName(p.id);
     p.brain = new BotBrain(p.id);
@@ -150,9 +211,7 @@ export class Match {
   // ---------- rodada ----------
   private newRound() {
     const w = this.world;
-    const k = Math.floor(this.rnd() * w.czCandidates.length);
-    const c = w.czCandidates[k];
-    this.cz = { x: c.x, z: c.z, r: CZ_RADIUS };
+    this.cz = chooseControlZone(w.bases, CZ_RADIUS, () => this.rnd());
     this.moveHotZone();
     this.scores = [0, 0, 0];
     this.presence = [0, 0, 0];
@@ -170,6 +229,7 @@ export class Match {
       this.broadcast({ t: 'build', remove });
     }
     this.sandbags.length = 0;
+    this.drops.length = 0;
     this.computeCover();
     for (const p of this.players) {
       if (p.life !== LIFE_NONE) {
@@ -181,7 +241,7 @@ export class Match {
       p.points = 0; p.presenceAcc = 0; p.markedUntil = 0; p.respawnAt = 0; p.vehicleId = -1;
       if (p.bot) { p.deaths = 0; p.kills = 0; p.respawnAt = this.tick + 30 + Math.floor(this.rnd() * 240); }
     }
-    this.broadcast({ t: 'msg', text: `Control Zone: ${w.pois[k]?.name ?? ''}` });
+    this.broadcast({ t: 'msg', text: 'Control Zone sorteada entre a vila e o distrito industrial' });
     this.sendState();
   }
 
@@ -208,11 +268,34 @@ export class Match {
     this.cover = pts;
   }
 
+  private hzTarget = { x: 0, z: 0 };
+  private hzPoint() {
+    for (let i = 0; i < 64; i++) {
+      const district = this.world.pois[this.rnd() < .5 ? 0 : 1];
+      const a = this.rnd() * Math.PI * 2, r = Math.sqrt(this.rnd()) * district.r * .65;
+      const point = { x: district.x + Math.cos(a) * r, z: district.z + Math.sin(a) * r };
+      if (Math.hypot(point.x - this.cz.x, point.z - this.cz.z) < this.cz.r - HZ_RADIUS - 12 && !this.world.blockedAt(point.x, point.z)) return point;
+    }
+    return { x: this.cz.x, z: this.cz.z };
+  }
+  /** Nova rodada: a Hot Zone surge num ponto da Control Zone e já parte, devagar, para outro. */
   private moveHotZone() {
-    const a = this.rnd() * Math.PI * 2;
-    const r = Math.sqrt(this.rnd()) * (CZ_RADIUS - HZ_RADIUS - 12);
-    this.hz = { x: this.cz.x + Math.cos(a) * r, z: this.cz.z + Math.sin(a) * r, r: HZ_RADIUS };
-    this.hzMoveAt = this.tick + HZ_MOVE_SECONDS * TICK_RATE;
+    const s = this.hzPoint();
+    this.hz = { x: s.x, z: s.z, r: HZ_RADIUS };
+    this.pickHzTarget();
+  }
+  /** Próximo destino: um ponto da Control Zone a pelo menos 70 m do atual. */
+  private pickHzTarget() {
+    let t = this.hzPoint();
+    for (let i = 0; i < 10 && Math.hypot(t.x - this.hz.x, t.z - this.hz.z) < 70; i++) t = this.hzPoint();
+    this.hzTarget = t;
+    this.hzMoveAt = this.tick + Math.ceil(Math.hypot(t.x - this.hz.x, t.z - this.hz.z) / HZ_DRIFT_SPEED) * TICK_RATE;
+  }
+  /** Chamado a cada segundo: a Hot Zone desliza para o destino (como no WarDogs), sem teleporte. */
+  private driftHotZone() {
+    const dx = this.hzTarget.x - this.hz.x, dz = this.hzTarget.z - this.hz.z, d = Math.hypot(dx, dz);
+    if (d <= HZ_DRIFT_SPEED) { this.hz = { x: this.hzTarget.x, z: this.hzTarget.z, r: HZ_RADIUS }; this.pickHzTarget(); return; }
+    this.hz = { x: this.hz.x + (dx / d) * HZ_DRIFT_SPEED, z: this.hz.z + (dz / d) * HZ_DRIFT_SPEED, r: HZ_RADIUS };
   }
 
   private endMatch(winner: number) {
@@ -248,6 +331,7 @@ export class Match {
     const p = slot;
     const clean = (name || 'Mercenário').replace(/[^\p{L}\p{N} _\-.]/gu, '').trim().slice(0, 16) || 'Mercenário';
     const profile = this.store ? this.store.loadOrCreate(token, clean) : { token: 'mem', name: clean, cash: 10000, xp: 0, kills: 0, deaths: 0, wins: 0 };
+    this.dismountPlayer(p); // o bot desta vaga podia estar num veículo
     p.bot = false; p.brain = null; p.conn = conn; p.profile = profile; p.name = clean;
     p.cash = profile.cash; p.xp = profile.xp; p.kills = 0; p.deaths = 0; p.points = 0; p.lifeProfit = 0;
     p.life = LIFE_NONE; p.loadout = null; p.inputs.length = 0; p.ack = 0; p.budget = 0; p.respawnAt = 0;
@@ -307,6 +391,9 @@ export class Match {
         [p.cargo[m.from],p.cargo[m.to]]=[p.cargo[m.to],p.cargo[m.from]];
         this.sendInventory(p); break;
       }
+      case 'loot': this.loot(p); break;
+      case 'inspectLoot': this.inspectLoot(p); break;
+      case 'swapLootWeapon': this.swapLootWeapon(p, m.target, m.revision, m.slot); break;
       case 'giveup':
         if (p.life === LIFE_DOWNED) this.die(p, 'Você desistiu');
         break;
@@ -314,57 +401,21 @@ export class Match {
         this.sendTo(p, { t: 'board', rows: this.players.filter((q) => this.active(q)).map((q) => ({ id: q.id, kills: q.kills, deaths: q.deaths, score: Math.round(q.points) })) });
         break;
       case 'buyVehicle': {
-        if (p.life !== LIFE_ALIVE) return;
         const vType = typeof m.vehicleType === 'string' ? m.vehicleType : 'quad';
-        const def = VEHICLE_BY_ID[vType];
-        if (!def || def.soon) {
-          this.sendTo(p, { t: 'msg', text: 'Veículo indisponível no momento' });
-          return;
-        }
-        const vPos = getVendorPos(p.team, this.world);
-        const distToVendor = Math.hypot(p.ms.x - vPos.x, p.ms.z - vPos.z);
-        if (distToVendor > 25) {
-          this.sendTo(p, { t: 'msg', text: 'Vá até o vendedor de veículos da base para comprar!' });
-          return;
-        }
-        if (p.cash < def.price) {
-          this.sendTo(p, { t: 'msg', text: `Saldo insuficiente! Custa $${def.price.toLocaleString('pt-BR')}` });
-          return;
-        }
-        this.dismountPlayer(p);
-        p.cash -= def.price;
-        this.sendTo(p,{t:'purchase',amount:def.price,kind:'vehicle'});
-        p.profileDirty = true; p.saveDirty = true;
-        this.sendProfile(p);
-
-        const spawnPos = getVehicleSpawnPos(p.team, this.world);
-        const vid = this.nextVehicleId++;
-        const veh = newVehicle(vid, vType, spawnPos.x, spawnPos.y, spawnPos.z, spawnPos.yaw, p.team);
-        veh.driverId = p.id;
-        p.vehicleId = vid;
-        p.ms.x = veh.x; p.ms.y = veh.y; p.ms.z = veh.z;
-        p.yaw = veh.yaw;
-        p.ms.vx = 0; p.ms.vy = 0; p.ms.vz = 0;
-
-        this.vehicles.set(vid, veh);
-        this.sendVehicles();
-        this.sendTo(p, { t: 'msg', text: `${def.name} pronto! Use [WASD] para pilotar e [E] para descer.` });
+        const error = this.buyVehicle(p, vType);
+        this.sendTo(p, { t: 'msg', text: error ?? `${VEHICLE_BY_ID[vType]!.name} pronto! [WASD] pilota, [E] desce. Um aliado pode subir na garupa.` });
         break;
       }
       case 'mountVehicle': {
         if (p.life !== LIFE_ALIVE || p.vehicleId !== -1) return;
         const vid = Number(m.vehicleId);
         const veh = this.vehicles.get(vid);
-        if (!veh || veh.driverId !== -1) return;
+        if (!veh) return;
         const d = Math.hypot(p.ms.x - veh.x, p.ms.z - veh.z, p.ms.y - veh.y);
         if (d > 3.5) return;
-        veh.driverId = p.id;
-        p.vehicleId = veh.id;
-        p.ms.x = veh.x; p.ms.y = veh.y; p.ms.z = veh.z;
-        p.yaw = veh.yaw;
-        p.ms.vx = 0; p.ms.vy = 0; p.ms.vz = 0;
-        this.sendVehicles();
-        this.sendTo(p, { t: 'msg', text: `Você montou no ${VEHICLE_BY_ID[veh.type]?.name ?? 'veículo'}. [E] para descer.` });
+        const seat = this.mountVehicle(p, veh);
+        if (!seat) return;
+        this.sendTo(p, { t: 'msg', text: seat === 'driver' ? `Você montou no ${VEHICLE_BY_ID[veh.type]?.name ?? 'veículo'}. [E] para descer.` : 'Você subiu na garupa. [E] para descer.' });
         break;
       }
       case 'dismountVehicle':
@@ -393,7 +444,7 @@ export class Match {
     p.loadout = lo;
     p.lifeProfit = 0;
     p.profileDirty = true; p.saveDirty = true;
-    const mags = p.bot ? BASE_MAGS : 0;
+    const mags = p.bot ? BASE_MAGS + 2 : 0;
     p.cargo = Array(cargoCapacity(lo)).fill(null);
     const pw = lo.primary.weapon!, sw = lo.secondary.weapon!;
     p.ammo = [pw.mag, sw.mag];
@@ -428,7 +479,9 @@ export class Match {
     p.lastAttacker = -1;
     p.markedUntil = 0;
     p.presenceAcc = 0;
-    p.vehicleId = -1;
+    this.dismountPlayer(p); // nasce a pé: nenhum veículo pode continuar com ele no assento
+    p.ms = newMoveState(pos.x, this.world.groundAt(pos.x, pos.z, gy + 0.2, PLAYER_RADIUS), pos.z);
+    p.ms.onGround = true;
     p.inputs.length = 0;
     p.prevB = 0; p.prevB2 = 0;
     this.sendInventory(p);
@@ -513,7 +566,7 @@ export class Match {
       }
       if (p.life === LIFE_DOWNED) {
         if (tick - p.reviveTick > 4) p.reviveProg = 0;
-        if (tick >= p.downUntil) this.die(p, 'Ninguém te reanimou a tempo');
+        if (p.bot && tick >= p.downUntil) this.die(p, 'O bot desistiu de esperar');
       }
     }
 
@@ -551,7 +604,9 @@ export class Match {
   private everySecond() {
     const tick = this.tick;
     const alive: Player[] = [];
+    if (this.drops.length) this.drops = this.drops.filter((d) => d.expireAt > tick);
     for (const p of this.players) {
+      if (this.botShouldRespawn(p)) this.die(p, 'Reforço imediato');
       if (p.life !== LIFE_ALIVE) continue;
       alive.push(p);
       if (p.hp < HP_REGEN_CAP && tick - p.lastDamageTick > HP_REGEN_DELAY * TICK_RATE) p.hp = Math.min(HP_REGEN_CAP, p.hp + HP_REGEN_RATE);
@@ -569,6 +624,12 @@ export class Match {
         }
       }
     }
+    // bots sem munição que voltaram à base reabastecem (humanos compram no comerciante)
+    for (const p of alive) {
+      if (!p.bot || (p.reserve[0] >= p.maxReserve[0] && p.reserve[1] >= p.maxReserve[1])) continue;
+      const b = this.world.bases[p.team];
+      if (Math.abs(p.ms.x - b.x) < 46 && Math.abs(p.ms.z - b.z) < 46) { p.reserve[0] = p.maxReserve[0]; p.reserve[1] = p.maxReserve[1]; }
+    }
     this.presence = computePresence(alive.map((p) => ({ team: p.team, x: p.ms.x, z: p.ms.z })), this.cz, this.hz);
     if (this.phase === 'live') {
       const res = pointsFor(this.presence, 1);
@@ -583,7 +644,7 @@ export class Match {
         p.points += w === 'hz' ? 0.2 : 0.1;
         if (++p.presenceAcc >= PRESENCE_REWARD_SECONDS) { p.presenceAcc = 0; this.award(p, 'presence'); }
       }
-      if (tick >= this.hzMoveAt) { this.moveHotZone(); this.broadcast({ t: 'msg', text: 'A Hot Zone mudou de lugar!' }); }
+      this.driftHotZone();
     } else {
       this.control = -1;
     }
@@ -591,15 +652,137 @@ export class Match {
   }
 
   private stateMsg(): ServerMsg {
+    // HUD: só quem está vivo dentro da Control Zone
     const counts = [0, 0, 0];
-    for (const p of this.players) if (p.life === LIFE_ALIVE) counts[p.team]++;
+    for (const p of this.players) if (p.life === LIFE_ALIVE && this.inCz(p)) counts[p.team]++;
     return {
       t: 'state', phase: this.phase, timeLeft: Math.max(0, Math.ceil((this.phaseEnd - this.tick) / TICK_RATE)),
-      scores: this.scores.map((s) => Math.round(s * 10) / 10), presence: this.presence, control: this.control,
+      // 3 casas: a barra do próximo ponto enche suave
+      scores: this.scores.map((s) => Math.round(s * 1000) / 1000), presence: this.presence, control: this.control,
       cz: this.cz, hz: this.hz, hzIn: Math.max(0, Math.ceil((this.hzMoveAt - this.tick) / TICK_RATE)),
       fobs: this.fobs.filter((f): f is Fob => !!f).map((f) => ({ team: f.team, x: f.x, z: f.z, hp: Math.round(f.hp) })),
       winner: this.winner, counts,
+      drops: this.drops.map((d) => ({ id: d.id, x: d.x, y: d.y, z: d.z })),
     };
+  }
+
+  private inCz(p: Player): boolean { return (p.ms.x - this.cz.x) ** 2 + (p.ms.z - this.cz.z) ** 2 <= this.cz.r * this.cz.r; }
+  private czCount(team: number): number {
+    let n = 0;
+    for (const p of this.players) if (p.team === team && p.life === LIFE_ALIVE && this.inCz(p)) n++;
+    return n;
+  }
+  /** Bot caído com o time quase sem ninguém na zona renasce na hora (senão a partida desequilibra). */
+  private botShouldRespawn(p: Player): boolean {
+    return p.bot && p.life === LIFE_DOWNED && this.czCount(p.team) <= BOT_RESPAWN_MAX_IN_ZONE;
+  }
+
+  // ---------- loot ----------
+  private lootBody(p: Player, target?: number): Player | undefined {
+    if (p.life !== LIFE_ALIVE || p.vehicleId !== -1 || !p.loadout) return;
+    return this.players.filter(e => e !== p && e.team !== p.team && e.life === LIFE_DOWNED && e.loadout && (target === undefined || e.id === target))
+      .filter(e => Math.hypot(e.ms.x - p.ms.x, e.ms.y - p.ms.y, e.ms.z - p.ms.z) < LOOT_RANGE
+        && this.world.canSee(p.ms.x, p.ms.y + .5, p.ms.z, e.ms.x, e.ms.y + .5, e.ms.z))
+      .sort((a, b) => Math.hypot(a.ms.x - p.ms.x, a.ms.z - p.ms.z) - Math.hypot(b.ms.x - p.ms.x, b.ms.z - p.ms.z))[0];
+  }
+
+  private inspectLoot(p: Player) {
+    const b = this.lootBody(p);
+    if (!b) this.loot(p);
+    this.sendTo(p, { t: 'lootView', body: b ? { target: b.id, revision: b.lootRevision, name: b.name, weapons: [b.loadout!.primary.id, b.loadout!.secondary.id], ammo: [...b.ammo], magazines: this.mags(b) } : null });
+  }
+
+  private swapLootWeapon(p: Player, target: number, revision: number, slot: number) {
+    if (!Number.isInteger(target) || !Number.isInteger(revision) || (slot !== 0 && slot !== 1) || p.reloadEnd > 0) return;
+    const b = this.lootBody(p, target);
+    if (!b || b.lootRevision !== revision) { this.inspectLoot(p); return; }
+    const a = p.loadout!, lo = b.loadout!, key = slot === 0 ? 'primary' : 'secondary';
+    if (lo[key].empty) return;
+    // Reservas virtuais dos bots ficam no corpo como carregadores da arma anterior.
+    if (b.bot) {
+      for (let left = b.reserve[slot]; left > 0; left -= lo[key].weapon!.mag) b.cargo.push({ weapon: lo[key].id, rounds: Math.min(left, lo[key].weapon!.mag) });
+      b.reserve[slot] = 0;
+    }
+    [a[key], lo[key]] = [lo[key], a[key]];
+    [p.ammo[slot], b.ammo[slot]] = [b.ammo[slot], p.ammo[slot]];
+    const accessory = slot === 0 ? 'suppressor' : 'secondarySuppressor';
+    [a[accessory], lo[accessory]] = [lo[accessory], a[accessory]];
+    if (slot === 0) [a.sight, lo.sight] = [lo.sight, a.sight];
+    p.nextFire = Math.max(p.nextFire, p.simTime + .45);
+    b.reloadEnd = 0; b.lootRevision++;
+    this.syncReserve(p); if (!b.bot) this.syncReserve(b);
+    this.sendInventory(p); this.sendInventory(b); this.inspectLoot(p);
+  }
+
+  private mags(p: Player): Magazine[] {
+    const out: Magazine[] = p.cargo.filter((m): m is Magazine => !!m && m.rounds > 0).map((m) => ({ ...m }));
+    const lo = p.loadout;
+    if (!lo) return out;
+    [lo.primary, lo.secondary].forEach((it, i) => {
+      if (p.ammo[i] > 0) out.push({ weapon: it.id, rounds: p.ammo[i] });
+      if (p.bot) for (let left = p.reserve[i], size = it.weapon!.mag; left > 0 && out.length < 14; left -= size) out.push({ weapon: it.id, rounds: Math.min(size, left) });
+    });
+    return out.slice(0, 14);
+  }
+
+  private dropBackpack(p: Player) {
+    const mags = this.mags(p);
+    if (!mags.length) return;
+    this.drops.push({ id: this.nextDrop++, x: p.ms.x, y: p.ms.y, z: p.ms.z, mags, expireAt: this.tick + BACKPACK_SECONDS * TICK_RATE });
+    if (this.drops.length > 40) this.drops.shift();
+  }
+
+  /** Coloca um carregador no primeiro espaço livre, se a arma for uma das do jogador. */
+  private giveMag(p: Player, mag: Magazine): boolean {
+    const lo = p.loadout;
+    if (!lo || (mag.weapon !== lo.primary.id && mag.weapon !== lo.secondary.id)) return false;
+    const slot = p.cargo.findIndex((m) => !m);
+    if (slot < 0) return false;
+    p.cargo[slot] = mag;
+    return true;
+  }
+
+  private loot(p: Player) {
+    if (p.life !== LIFE_ALIVE || !p.loadout || p.vehicleId !== -1 || p.reloadEnd > 0) return;
+    const r2 = LOOT_RANGE * LOOT_RANGE;
+    const d2 = (x: number, y: number, z: number) => (x - p.ms.x) ** 2 + (z - p.ms.z) ** 2 + (y - p.ms.y) ** 2;
+    let body: Player | null = null, drop: Drop | null = null, best = r2;
+    for (const e of this.players) {
+      if (e.life !== LIFE_DOWNED || e.team === p.team || !this.lootBody(p, e.id)) continue;
+      const d = d2(e.ms.x, e.ms.y, e.ms.z);
+      if (d < best) { best = d; body = e; drop = null; }
+    }
+    for (const dr of this.drops) {
+      if (!this.world.canSee(p.ms.x, p.ms.y + .5, p.ms.z, dr.x, dr.y + .5, dr.z)) continue;
+      const d = d2(dr.x, dr.y, dr.z);
+      if (d < best) { best = d; drop = dr; body = null; }
+    }
+    if (!body && !drop) return;
+    let got = 0;
+    if (drop) {
+      drop.mags = drop.mags.filter((mg) => { if (this.giveMag(p, mg)) { got++; return false; } return true; });
+      if (!drop.mags.length) { this.drops = this.drops.filter((x) => x !== drop); this.sendState(); }
+    } else if (body?.loadout) {
+      const b = body;
+      b.lootRevision++;
+      for (let i = 0; i < b.cargo.length; i++) {
+        const mg = b.cargo[i];
+        if (mg && this.giveMag(p, mg)) { b.cargo[i] = null; got++; }
+      }
+      [b.loadout!.primary, b.loadout!.secondary].forEach((it, i) => {
+        if (b.ammo[i] > 0 && this.giveMag(p, { weapon: it.id, rounds: b.ammo[i] })) { b.ammo[i] = 0; got++; }
+      });
+      if (b.bot) [b.loadout!.primary, b.loadout!.secondary].forEach((it, i) => {
+        while (b.reserve[i] > 0) {
+          const rounds = Math.min(it.weapon!.mag, b.reserve[i]);
+          if (!this.giveMag(p, { weapon: it.id, rounds })) break;
+          b.reserve[i] -= rounds; got++;
+        }
+      });
+      else { this.syncReserve(b); this.sendInventory(b); }
+    }
+    this.syncReserve(p); this.sendInventory(p);
+    this.sendTo(p, { t: 'msg', text: got > 0 ? `Você pegou ${got} carregador${got > 1 ? 'es' : ''}` : 'Nada útil ou sem espaço na mochila' });
   }
   private sendState() { this.broadcast(this.stateMsg()); }
 
@@ -620,6 +803,14 @@ export class Match {
           if ((inp.buttons2 & BTN2_USE) && !(p.prevB2 & BTN2_USE)) {
             this.dismountPlayer(p);
           }
+        } else if (veh && veh.passengerId === p.id) {
+          // garupa: vai atrás do piloto, olha e atira livremente
+          p.ms.x = veh.x + Math.sin(veh.yaw) * 0.55; p.ms.z = veh.z + Math.cos(veh.yaw) * 0.55; p.ms.y = veh.y + 0.08;
+          p.ms.vx = -Math.sin(veh.yaw) * veh.speed; p.ms.vz = -Math.cos(veh.yaw) * veh.speed; p.ms.vy = 0;
+          p.sprinting = false;
+          p.simTime += DT;
+          if ((inp.buttons2 & BTN2_USE) && !(p.prevB2 & BTN2_USE)) this.dismountPlayer(p);
+          else this.weapons(p, inp);
         } else {
           p.vehicleId = -1;
         }
@@ -727,9 +918,9 @@ export class Match {
           continue;
         }
         const h = st === 2 ? CROUCH_HEIGHT : PLAYER_HEIGHT;
-        const th = raySphere(ox, oy, oz, dx, dy, dz, ex, ey + h - 0.14, ez, 0.21);
+        const th = raySphere(ox, oy, oz, dx, dy, dz, ex, ey + h - 0.15, ez, 0.26);
         const tb = rayCylinder(ox, oy, oz, dx, dy, dz, ex, ez, ey, ey + h - 0.3, 0.38);
-        if (th >= 0 && th < best && (tb < 0 || th <= tb + 0.35)) { best = th; hit = e; head = true; }
+        if (th >= 0 && th < best && (tb < 0 || th <= tb + 0.45)) { best = th; hit = e; head = true; }
         else if (tb >= 0 && tb < best) { best = tb; hit = e; head = false; }
       }
       let hitVeh: VehicleState | null = null;
@@ -773,7 +964,7 @@ export class Match {
   }
 
   damage(victim: Player, amount: number, attacker: Player | null, weaponName: string, head: boolean) {
-    if (victim.life === LIFE_NONE || amount <= 0) return;
+    if (victim.life !== LIFE_ALIVE || amount <= 0) return;
     victim.hp -= amount;
     victim.lastDamageTick = this.tick;
     if (attacker && attacker !== victim) { victim.damagers.set(attacker.id, this.tick); victim.lastAttacker = attacker.id; }
@@ -787,10 +978,11 @@ export class Match {
     this.dismountPlayer(victim);
     victim.life = LIFE_DOWNED;
     victim.hp = 30;
-    victim.downUntil = this.tick + DOWNED_SECONDS * TICK_RATE;
+    victim.downUntil = victim.bot ? this.tick + DOWNED_SECONDS * TICK_RATE : Infinity;
+    victim.lootRevision++;
     victim.reviveProg = 0;
     victim.ms.vx = 0; victim.ms.vz = 0;
-    this.sendTo(victim, { t: 'life', life: LIFE_DOWNED, downLeft: DOWNED_SECONDS });
+    this.sendTo(victim, { t: 'life', life: LIFE_DOWNED, downLeft: victim.bot ? DOWNED_SECONDS : -1 });
     const credit = attacker && attacker !== victim && attacker.team !== victim.team ? attacker : null;
     if (credit) {
       credit.kills++; credit.points += 10;
@@ -809,11 +1001,13 @@ export class Match {
     victim.damagers.clear();
     victim.markedUntil = 0;
     this.broadcast({ t: 'kill', killer: credit ? credit.id : -1, victim: victim.id, weapon: weaponName, head, downed: true });
+    if (this.botShouldRespawn(victim)) this.die(victim, 'Reforço imediato');
   }
 
   die(p: Player, reason: string) {
     if (p.life === LIFE_NONE) return;
     this.dismountPlayer(p);
+    this.dropBackpack(p); // o corpo some; só a mochila fica para lootear
     p.life = LIFE_NONE;
     p.hp = 0;
     p.deaths++;
@@ -841,7 +1035,7 @@ export class Match {
           best.life = LIFE_ALIVE; best.hp = p.hasDefib ? MAX_HP : 40; best.lastDamageTick = this.tick; best.reviveProg = 0;
           best.inputs.length = 0;
           this.sendTo(best, { t: 'life', life: LIFE_ALIVE, tools: this.toolsMsg(best) });
-          this.sendTo(best, { t: 'msg', text: `${p.name} te reanimou — equipamento mantido!` });
+          this.sendTo(best, { t: 'msg', text: `${p.name} te reanimou — você voltou com o equipamento que estava no corpo.` });
           p.points += 5;
           this.award(p, 'revive');
         }

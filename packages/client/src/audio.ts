@@ -256,60 +256,47 @@ export class Sfx {
   reload() { this.burst(2400, 3, 0.05, 0.25, 0); }
   alert() { this.tone(660, 0.18, 0.18, 'sawtooth'); this.tone(880, 0.25, 0.18, 'sawtooth', 0.16); }
 
-  private engineOsc: OscillatorNode | null = null;
-  private engineGain: GainNode | null = null;
-  private engineFilter: BiquadFilterNode | null = null;
+  /** Um motor por veículo com piloto, posicionado em 3D: some com a distância como os tiros. */
+  private engines = new Map<number, { osc: OscillatorNode; sub: OscillatorNode; filter: BiquadFilterNode; gain: GainNode; pan: PannerNode }>();
 
-  startEngine() {
+  updateEngines(list: { id: number; x: number; y: number; z: number; speed: number }[]) {
     const c = this.ctx;
-    if (!c || !this.master || this.engineOsc) return;
-    try {
-      const osc = c.createOscillator();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(42, c.currentTime);
-
-      const filter = c.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(260, c.currentTime);
-
-      const gain = c.createGain();
-      gain.gain.setValueAtTime(0.01, c.currentTime);
-      gain.gain.linearRampToValueAtTime(0.18, c.currentTime + 0.2);
-
-      osc.connect(filter).connect(gain).connect(this.master);
-      osc.start();
-
-      this.engineOsc = osc;
-      this.engineFilter = filter;
-      this.engineGain = gain;
-    } catch { /* ignora */ }
-  }
-
-  updateEngine(speedFraction: number) {
-    const c = this.ctx;
-    if (!c || !this.engineOsc || !this.engineFilter) return;
-    const f = Math.max(0, Math.min(1, speedFraction));
-    const targetFreq = 42 + f * 95;
-    const filterFreq = 260 + f * 420;
+    if (!c || !this.master) return;
     const t = c.currentTime;
-    this.engineOsc.frequency.setTargetAtTime(targetFreq, t, 0.08);
-    this.engineFilter.frequency.setTargetAtTime(filterFreq, t, 0.08);
-  }
-
-  stopEngine() {
-    const c = this.ctx;
-    if (this.engineGain && c) {
-      try {
-        this.engineGain.gain.linearRampToValueAtTime(0.0001, c.currentTime + 0.15);
-      } catch { /* ignora */ }
-    }
-    setTimeout(() => {
-      if (this.engineOsc) {
-        try { this.engineOsc.stop(); this.engineOsc.disconnect(); } catch { /* ignora */ }
-        this.engineOsc = null;
-        this.engineGain = null;
-        this.engineFilter = null;
+    const seen = new Set<number>();
+    for (const v of list) {
+      const dist = Math.hypot(v.x - this.lx, v.y - this.ly, v.z - this.lz);
+      if (dist > 220) continue;
+      seen.add(v.id);
+      let e = this.engines.get(v.id);
+      if (!e) {
+        try {
+          const osc = c.createOscillator(); osc.type = 'sawtooth';
+          const sub = c.createOscillator(); sub.type = 'square';
+          const filter = c.createBiquadFilter(); filter.type = 'lowpass';
+          const gain = c.createGain(); gain.gain.setValueAtTime(0.0001, t); gain.gain.linearRampToValueAtTime(0.2, t + 0.25);
+          const subGain = c.createGain(); subGain.gain.value = 0.35;
+          const pan = c.createPanner();
+          pan.panningModel = 'HRTF'; pan.distanceModel = 'inverse';
+          pan.refDistance = 3; pan.rolloffFactor = 1.6; pan.maxDistance = 10000;
+          osc.connect(filter); sub.connect(subGain).connect(filter);
+          filter.connect(gain).connect(pan).connect(this.master);
+          osc.start(); sub.start();
+          e = { osc, sub, filter, gain, pan };
+          this.engines.set(v.id, e);
+        } catch { continue; }
       }
-    }, 160);
+      if (e.pan.positionX) { e.pan.positionX.value = v.x; e.pan.positionY.value = v.y + 0.5; e.pan.positionZ.value = v.z; } else e.pan.setPosition(v.x, v.y + 0.5, v.z);
+      const f = Math.max(0, Math.min(1, Math.abs(v.speed) / 17.5));
+      e.osc.frequency.setTargetAtTime(42 + f * 95, t, 0.08);
+      e.sub.frequency.setTargetAtTime(21 + f * 47, t, 0.08);
+      // de longe o motor fica abafado (perde os agudos)
+      e.filter.frequency.setTargetAtTime(Math.max(140, (260 + f * 420) / (1 + dist / 60)), t, 0.1);
+    }
+    for (const [id, e] of this.engines) {
+      if (seen.has(id)) continue;
+      this.engines.delete(id);
+      try { e.gain.gain.setTargetAtTime(0.0001, t, 0.05); e.osc.stop(t + 0.3); e.sub.stop(t + 0.3); } catch { /* ignora */ }
+    }
   }
 }
