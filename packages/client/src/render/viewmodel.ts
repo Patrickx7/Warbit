@@ -4,6 +4,7 @@ import { gunModel, type GunModel } from './guns';
 
 const DARK = 0x1e2022;
 const SCALE = 0.72;
+type OpticModel = THREE.Group & { hip?: THREE.Group; aimed?: THREE.Group; eyeDistance?: number; rearZ?: number };
 
 const mat = (c: number) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
 const GUN_MAT = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
@@ -21,14 +22,14 @@ function hollow(r: number, len: number, color: number, x: number, y: number, z: 
   return m;
 }
 function ringMesh(r: number, color: number, x: number, y: number, z: number, thick = 0.005): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.TorusGeometry(r, thick, 5, 16), mat(color));
+  const m = new THREE.Mesh(new THREE.TorusGeometry(r, thick, 8, 48), mat(color));
   m.position.set(x, y, z);
   return m;
 }
 
 /** Mira óptica: moldura/tubo OCOS (a visão passa pelo meio) com ponto/retículo no centro exato da linha de mira. */
-function buildOptic(it: Item, centerY: number, z: number): THREE.Group {
-  const g = new THREE.Group();
+function buildOptic(it: Item, centerY: number, z: number): OpticModel {
+  const g: OpticModel = new THREE.Group();
   const s = it.sight!;
   if (s.kind === 'reddot' || s.kind === 'holo') {
     const w = s.kind === 'holo' ? 0.05 : 0.04, h = s.kind === 'holo' ? 0.042 : 0.034, t = 0.0035;
@@ -49,7 +50,8 @@ function buildOptic(it: Item, centerY: number, z: number): THREE.Group {
     }
   } else {
     // Lentes fecham o modelo externo; ao alinhar o olho, entra uma única visão óptica.
-    const len = s.zoom < 0.2 ? 0.3 : s.zoom < 0.3 ? 0.24 : 0.17;
+    const compact = s.zoom > .6;
+    const len = compact ? .115 : s.zoom < 0.2 ? 0.3 : s.zoom < 0.3 ? 0.24 : 0.17;
     const r = s.zoom < 0.3 ? 0.028 : 0.024;
     g.add(hollow(r, len, 0x15171a, 0, centerY, z));
     g.add(hollow(r + 0.007, 0.04, 0x0e0f10, 0, centerY, z - len / 2 + 0.015), hollow(r + 0.005, 0.035, 0x0e0f10, 0, centerY, z + len / 2 - 0.012));
@@ -60,12 +62,30 @@ function buildOptic(it: Item, centerY: number, z: number): THREE.Group {
     }
     g.add(part(0.022, 0.022, 0.07, DARK, 0, centerY - r - 0.012, z)); // base de montagem
     if (s.zoom >= 0.3) {
-      // retículo fino dentro da luneta de 2x
-      const glow = new THREE.MeshBasicMaterial({ color: 0x111111, fog: false });
-      const h = new THREE.Mesh(new THREE.BoxGeometry(r * 1.8, 0.0008, 0.0008), glow);
-      const v = new THREE.Mesh(new THREE.BoxGeometry(0.0008, r * 1.8, 0.0008), glow);
-      h.position.set(0, centerY, z - len / 2 + 0.01); v.position.copy(h.position);
-      g.add(h, v);
+      const hip = new THREE.Group(), aimed = new THREE.Group();
+      hip.add(...g.children.slice()); g.add(hip, aimed);
+      g.hip = hip; g.aimed = aimed; g.eyeDistance = compact ? .15 : .18; g.rearZ = z + len / 2 + .004;
+      aimed.visible = false;
+      const radius = compact ? .033 : .035, depth = compact ? .06 : .10, rear = g.rearZ;
+      // O interior abre para a frente conforme a perspectiva: só a borda ocular fica aparente.
+      const frontRadius = radius * (g.eyeDistance + depth * SCALE) / g.eyeDistance + .005;
+      const wall = new THREE.Mesh(new THREE.CylinderGeometry(radius + .004, frontRadius, depth, 32, 1, true), new THREE.MeshLambertMaterial({ color: 0x17191a, side: THREE.DoubleSide }));
+      wall.rotation.x = Math.PI / 2; wall.position.set(0, centerY, rear - depth / 2);
+      aimed.add(wall, ringMesh(radius + .002, 0x101112, 0, centerY, rear, .004));
+      const glass = new THREE.Mesh(new THREE.CircleGeometry(radius, 32), new THREE.MeshBasicMaterial({ color: 0x9ebfc8, transparent: true, opacity: .045, depthWrite: false, side: THREE.DoubleSide }));
+      glass.position.set(0, centerY, rear - .008); aimed.add(glass);
+      const reticleMat = new THREE.MeshBasicMaterial({ color: compact ? 0xd7dd42 : 0xf05238, fog: false });
+      const reticle = new THREE.Mesh(new THREE.TorusGeometry(compact ? .0018 : .0032, .00035, 5, 32, compact ? Math.PI * 2 : Math.PI * 1.5), reticleMat);
+      reticle.position.set(0, centerY, rear - .006); reticle.rotation.z = compact ? 0 : -Math.PI / 4;
+      const dot = new THREE.Mesh(new THREE.CircleGeometry(.0005, 12), reticleMat);
+      dot.name = 'opticAimPoint';
+      dot.position.copy(reticle.position); aimed.add(reticle, dot);
+      if (!compact) {
+        const stem = new THREE.Mesh(new THREE.BoxGeometry(.00035, .004, .00035), reticleMat);
+        stem.position.set(0, centerY - .006, rear - .006); aimed.add(stem);
+      }
+      aimed.add(part(.055, .014, .045, DARK, 0, centerY - radius - .01, rear - .025));
+      aimed.add(part(.014, .023, .025, DARK, (compact ? 1 : -1) * (radius + .009), centerY, rear - .02));
     }
   }
   return g;
@@ -78,7 +98,7 @@ export class ViewModel {
   private model: GunModel | null = null;
   private ironsM: THREE.Mesh | null = null;
   private scopeM: THREE.Mesh | null = null;
-  private optic: THREE.Group | null = null;
+  private optic: OpticModel | null = null;
   private armL: THREE.Mesh;
   private armR: THREE.Mesh;
   private cls: WeaponClass | '' = '';
@@ -145,7 +165,7 @@ export class ViewModel {
     const gm = this.model!;
     if (this.optic) { this.gun!.remove(this.optic); this.optic = null; }
     const optical = !!sight?.sight && cls !== 'pistol';
-    this.scoped = optical ? sight!.sight!.kind === 'scope' : gm.scope;
+    this.scoped = optical ? sight!.sight!.kind === 'scope' && sight!.sight!.zoom < .3 : gm.scope;
     if (this.ironsM) this.ironsM.visible = !optical;
     if (this.scopeM) this.scopeM.visible = !optical;
     this.sightY = gm.sightY;
@@ -155,7 +175,7 @@ export class ViewModel {
       this.optic = buildOptic(sight!, cy, z);
       this.gun!.add(this.optic);
       this.sightY = cy;
-      this.rearZ = z;
+      this.rearZ = this.optic.rearZ ?? z;
     }
   }
 
@@ -170,6 +190,10 @@ export class ViewModel {
     this.dip += ((reloading ? 1 : 0) - this.dip) * Math.min(1, dt * (reloading ? 10 : 6));
     if (onGround) this.bob += speed * dt * 1.5;
     const a = this.ads;
+    if (this.optic?.hip && this.optic.aimed) {
+      this.optic.hip.visible = a < .7;
+      this.optic.aimed.visible = a >= .7;
+    }
     const amp = Math.min(1, speed / 6) * (1 - a * 0.9);
     this.swayX += (-dyaw * 0.9 * (1 - a * 0.6) - this.swayX) * Math.min(1, dt * 10);
     this.swayY += (dpitch * 0.9 * (1 - a * 0.6) - this.swayY) * Math.min(1, dt * 10);
@@ -178,7 +202,7 @@ export class ViewModel {
     // posição de quadril
     const hipX = 0.16, hipY = -0.17 + (this.cls === 'pistol' ? 0.02 : 0), hipZ = -0.56;
     // posição de mira: a linha de mira (alça→massa/ponto) passa EXATAMENTE pelo centro da tela (0,0)
-    const adsX = 0, adsY = -this.sightY * SCALE, adsZ = -0.27 - this.rearZ * SCALE;
+    const adsX = 0, adsY = -this.sightY * SCALE, adsZ = -(this.optic?.eyeDistance ?? .27) - this.rearZ * SCALE;
     g.position.set(
       hipX + (adsX - hipX) * a + Math.sin(this.bob) * 0.012 * amp + this.swayX,
       hipY + (adsY - hipY) * a + Math.abs(Math.cos(this.bob)) * 0.012 * amp - this.dip * 0.22 + this.swayY - spr * 0.1,

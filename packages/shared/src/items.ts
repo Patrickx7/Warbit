@@ -79,7 +79,8 @@ const DEFS: Def[] = [
   // --- miras (preços estimados: o WarDogs não publicou) ---
   { id: 'mira_pontovermelho', name: 'Mira ponto vermelho', slot: 'sight', track: 'Miras', price: 350, level: 1, desc: 'Ponto vermelho em janela aberta. Pequeno aumento.', sight: { zoom: 0.8, kind: 'reddot' } },
   { id: 'mira_holografica', name: 'Mira holográfica', slot: 'sight', track: 'Miras', price: 600, level: 2, desc: 'Retículo em anel, rápido de alinhar.', sight: { zoom: 0.76, kind: 'holo' } },
-  { id: 'mira_2x', name: 'Mira 2x', slot: 'sight', track: 'Miras', price: 500, level: 2, desc: 'Luneta curta de 2 aumentos.', sight: { zoom: 0.52, kind: 'scope' } },
+  { id: 'mira_1_5x', name: 'Óptica 1,5x', slot: 'sight', track: 'Miras', price: 350, level: 1, desc: 'Mira compacta de 1,5 aumentos, retículo circular amarelo e visão periférica livre.', sight: { zoom: 0.69, kind: 'scope' } },
+  { id: 'mira_2x', name: 'Mira 2x', slot: 'sight', track: 'Miras', price: 500, level: 2, desc: 'Luneta curta de 2 aumentos, retículo vermelho e visão periférica livre.', sight: { zoom: 0.52, kind: 'scope' } },
   { id: 'mira_4x', name: 'Luneta 4x', slot: 'sight', track: 'Miras', price: 900, level: 4, desc: 'Luneta de 4 aumentos.', sight: { zoom: 0.27, kind: 'scope' } },
   { id: 'mira_6x', name: 'Luneta 6x', slot: 'sight', track: 'Miras', price: 1400, level: 6, desc: 'Só para armas de precisão.', sight: { zoom: 0.18, kind: 'scope', sniperOnly: true } },
   { id: 'mira_8x', name: 'Luneta 8x', slot: 'sight', track: 'Miras', price: 2000, level: 8, desc: 'Só para armas de precisão. Longuíssimo alcance.', sight: { zoom: 0.13, kind: 'scope', sniperOnly: true } },
