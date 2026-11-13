@@ -36,6 +36,7 @@ FPS multiplayer leve no navegador: 60 jogadores, 3 times, Control Zone + Hot Zon
 - HUD: a linha sob o placar é a **barra do próximo ponto** — enche na cor de quem domina a CZ até +1 ponto, troca de cor quando outro time assume, fica cinza no empate.
 - HUD: o número de jogadores sob o minimapa conta só **vivos dentro da Control Zone** (`counts` no `state`).
 - HUD: minimapa **quadrado** no canto inferior esquerdo (circular é só a zona) e, logo abaixo, por time: jogadores vivos · pontos · barra de progresso.
+- HUD de vida **compacto no canto inferior direito**: capacete e armadura com porcentagem de integridade restante, coração com vida e emblema do time. Peça ausente aparece como “—”; stamina continua oculta. Dano absorvido desgasta a peça no servidor; a 0% ela não protege. Cura e confirmar a mesma compra não reparam a proteção.
 - Minimapa gira com o jogador; **N** troca o zoom (Shift+N inverte).
 - **Não usar Ctrl como tecla de jogo** (Ctrl+W fecha a aba). Tela cheia é opcional no menu — neste navegador embutido ela derruba a aba.
 - Plano de evolução (visual realista mantendo a web) em `C:\Users\Patrick\.claude\plans\quero-um-jogo-no-drifting-starlight.md`.

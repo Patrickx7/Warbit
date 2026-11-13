@@ -1,6 +1,7 @@
 import { cargoCapacity, loadoutIds, MAGAZINE_PRICE, type Magazine } from '@warbit/shared';
 import { weaponIcon } from './render/itemIcons';
 import { gearIcon, magazineIcon } from './render/gearIcons';
+import { ConditionHud } from './conditionHud';
 import {
   BoxKind, ITEMS, ITEM_BY_ID, MAX_TOOLS, SCORE_PER_PRESENCE_SECOND, SCORE_TO_WIN, Surface, TEAM_CSS, TEAM_NAMES, WORLD_SIZE, buildLoadout,
   levelFromXp, priceFor, xpForLevel, VEHICLES, VEHICLE_BY_ID, type VehicleState, type Item, type RosterEntry, type World, type Zone, type ZoneWhere, type WeaponStats, type Loadout,
@@ -68,6 +69,7 @@ function bars(w: WeaponStats): string {
 }
 
 export class UI {
+  conditionHud = new ConditionHud($('conditionHud'));
   profile: ProfileView = { cash: 0, xp: 0, level: 1, lifeProfit: 0, kills: 0, deaths: 0 };
   /** nada vem marcado: o jogador escolhe item por item */
   private sel = new Set<string>();

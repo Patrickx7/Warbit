@@ -54,6 +54,10 @@ export const STAMINA_RESUME = 0.3; // cansado: só volta a correr com 30%
 export const SPRINT_FLAG_SPEED = 4.6;
 export const RESPAWN_SECONDS = 0;
 export const BOT_RESPAWN_SECONDS = 10;
+// Pontos de dano absorvido antes de a proteção se esgotar, por nível.
+export const ARMOR_DURABILITY = [0, 45, 65, 85, 110] as const;
+export const HELMET_DURABILITY = [0, 25, 35, 50, 65] as const;
+export const BLAST_PROTECTION_SCALE = 0.5;
 
 // FOB (posição fortificada construída pelo time)
 export const FOB_HP = 300;

@@ -1,7 +1,7 @@
 import { BACKPACK_SECONDS, BOT_RESPAWN_MAX_IN_ZONE, LOOT_RANGE, type Magazine } from '@warbit/shared';
-import { BOT_RESPAWN_SECONDS, cargoCapacity, loadoutIds, getEquipmentVendorPos, MAGAZINE_PRICE, ITEM_BY_ID, priceFor } from '@warbit/shared';
+import { absorbDamage, protectionCapacity, protectionPercent, BLAST_PROTECTION_SCALE, BOT_RESPAWN_SECONDS, cargoCapacity, loadoutIds, getEquipmentVendorPos, MAGAZINE_PRICE, ITEM_BY_ID, priceFor } from '@warbit/shared';
 import {
-  ALIVE_MASK_BYTES, ARMOR_REDUCTION, BASE_MAGS, BOT_START_CASH, BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD,
+  ALIVE_MASK_BYTES, BASE_MAGS, BOT_START_CASH, BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD,
   BTN2_SECONDARY, BTN2_USE, BTN3_FOB, BTN_FIRE, BTN_SPRINT, BUILD_USES, BoxKind, CROUCH_HEIGHT, CZ_RADIUS, DEFIB_SECONDS,
   DOWNED_SECONDS, DT, FAR_SNAPSHOT_EVERY, FOB_HP, FOB_MIN_BASE_DIST, FOB_RADIUS, FRAG_COUNT, HP_REGEN_CAP, HP_REGEN_DELAY,
   HP_REGEN_RATE, HZ_DRIFT_SPEED, HZ_MOVE_SECONDS, HZ_RADIUS, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, MATCH_END_SECONDS, MAX_HP, MAX_PLAYERS, MEDBAG_USES,
@@ -493,6 +493,8 @@ export class Match {
     const lo = res.loadout;
     p.cash -= lo.cost;
     p.loadout = lo;
+    p.armorDurability = protectionCapacity(lo.armor?.armor ?? 0);
+    p.helmetDurability = protectionCapacity(lo.helmet?.helmet ?? 0, true);
     p.lifeProfit = 0;
     p.profileDirty = true; p.saveDirty = true;
     const mags = p.bot ? BASE_MAGS + 2 : 0;
@@ -575,6 +577,8 @@ export class Match {
     p.cash-=cost; p.profileDirty=true;p.saveDirty=true;
     if(old.primary.id!==lo.primary.id) p.ammo[0]=lo.primary.weapon!.mag;
     if(old.secondary.id!==lo.secondary.id) p.ammo[1]=lo.secondary.weapon!.mag;
+    if(old.armor?.id!==lo.armor?.id) p.armorDurability=protectionCapacity(lo.armor?.armor??0);
+    if(old.helmet?.id!==lo.helmet?.id) p.helmetDurability=protectionCapacity(lo.helmet?.helmet??0,true);
     p.loadout=lo;p.cargo=cargo;p.reloadEnd=0;
     const has=(kind:string)=>lo.tools.some(t=>t.tool===kind);
     const added=(kind:string)=>has(kind)&&!old.tools.some(t=>t.tool===kind);
@@ -1004,10 +1008,9 @@ export class Match {
           const f = Math.min(1, (best - w.falloffStart) / Math.max(1, w.falloffEnd - w.falloffStart));
           dmg *= 1 - f * (1 - w.minDmgMul);
         }
-        if (head) dmg *= w.headMul * (1 - ARMOR_REDUCTION[hit.loadout?.helmet?.helmet ?? 0]);
-        else dmg *= 1 - ARMOR_REDUCTION[hit.loadout?.armor?.armor ?? 0];
+        if (head) dmg *= w.headMul;
         const wasAlive = hit.life === LIFE_ALIVE;
-        this.damage(hit, dmg, p, weaponName, head);
+        dmg = this.damage(hit, dmg, p, weaponName, head, 1);
         totalDmg += dmg; anyHead ||= head;
         if (wasAlive && hit.life !== LIFE_ALIVE) anyKill = true;
       }
@@ -1015,15 +1018,23 @@ export class Match {
     if (totalDmg > 0) this.sendTo(p, { t: 'hit', dmg: Math.round(totalDmg), head: anyHead, kill: anyKill });
   }
 
-  damage(victim: Player, amount: number, attacker: Player | null, weaponName: string, head: boolean) {
-    if (victim.life !== LIFE_ALIVE || amount <= 0) return;
+  damage(victim: Player, amount: number, attacker: Player | null, weaponName: string, head: boolean, protectionScale = 0): number {
+    if (victim.life !== LIFE_ALIVE || amount <= 0) return 0;
+    if (protectionScale > 0) {
+      const tier = head ? victim.loadout?.helmet?.helmet ?? 0 : victim.loadout?.armor?.armor ?? 0;
+      const result = absorbDamage(amount, tier, head ? victim.helmetDurability : victim.armorDurability, protectionScale);
+      amount = result.damage;
+      if (head) victim.helmetDurability = result.remaining;
+      else victim.armorDurability = result.remaining;
+    }
     victim.hp -= amount;
     victim.lastDamageTick = this.tick;
     if (attacker && attacker !== victim) { victim.damagers.set(attacker.id, this.tick); victim.lastAttacker = attacker.id; }
     if (victim.conn) this.sendTo(victim, { t: 'hurt', x: attacker ? attacker.ms.x : victim.ms.x, z: attacker ? attacker.ms.z : victim.ms.z, dmg: Math.round(amount) });
-    if (victim.hp > 0) return;
+    if (victim.hp > 0) return amount;
     if (victim.life === LIFE_ALIVE) this.goDown(victim, attacker, weaponName, head);
     else this.die(victim, 'Você foi finalizado');
+    return amount;
   }
 
   private goDown(victim: Player, attacker: Player | null, weaponName: string, head: boolean) {
@@ -1065,6 +1076,7 @@ export class Match {
     p.deaths++;
     if (p.profile) p.profile.deaths++;
     p.loadout = null; // morreu: perdeu o equipamento comprado
+    p.armorDurability = 0; p.helmetDurability = 0;
     p.lifeProfit = 0;
     p.profileDirty = true; p.saveDirty = true;
     const wait = p.bot ? BOT_RESPAWN_SECONDS : RESPAWN_SECONDS;
@@ -1226,8 +1238,8 @@ export class Match {
       const d = Math.hypot(e.ms.x - n.x, e.ms.y + 0.9 - n.y, e.ms.z - n.z);
       if (d > NADE_RADIUS) continue;
       if (!this.world.hasLineOfSight(n.x, n.y + 0.3, n.z, e.ms.x, e.ms.y + 1, e.ms.z)) continue;
-      const dmg = NADE_DAMAGE * (1 - d / NADE_RADIUS) * (1 - ARMOR_REDUCTION[e.loadout?.armor?.armor ?? 0] * 0.5);
-      this.damage(e, dmg, owner, 'Granada', false);
+      const dmg = NADE_DAMAGE * (1 - d / NADE_RADIUS);
+      this.damage(e, dmg, owner, 'Granada', false, BLAST_PROTECTION_SCALE);
     }
     // FOBs inimigas sofrem dano de explosão
     for (const f of this.fobs) {
@@ -1285,6 +1297,8 @@ export class Match {
           ammo: p.ammo[slot], reserve: p.reserve[slot],
           flags: (p.reloadEnd > 0 ? 1 : 0) | (p.ms.onGround ? 2 : 0) | (p.ms.crouch ? 4 : 0) | (p.ms.tired ? 8 : 0) | (p.ms.prone ? 16 : 0), slot,
           stamina: p.ms.stamina, stanceCd: p.ms.stanceCd,
+          armorCondition: protectionPercent(p.armorDurability, p.loadout?.armor?.armor ?? 0),
+          helmetCondition: protectionPercent(p.helmetDurability, p.loadout?.helmet?.helmet ?? 0, true),
         },
         alive: mask, ents: list,
       }));

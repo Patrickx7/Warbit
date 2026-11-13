@@ -775,6 +775,7 @@ class Game {
       this.ui.aim(scoped);
       this.ui.hint(actionHint);
       if (this.own) this.ui.setVitals(alive ? this.own.hp : 0, alive ? Math.min(this.localAmmo, 999) : 0, alive ? this.own.reserve : 0, it?.name ?? '', reloading, this.slot === 0 ? this.loadout?.sight?.name ?? '' : '');
+      this.ui.conditionHud.update(this.own?.hp ?? 100, this.loadout?.armor ? this.own?.armorCondition ?? 100 : null, this.loadout?.helmet ? this.own?.helmetCondition ?? 100 : null, this.myTeam, alive);
       this.ui.setStamina(p.stamina, p.tired, p.prone ? 'Deitado' : p.crouch ? 'Agachado' : p.tired ? 'Cansado' : 'Em pé');
       this.ui.setZone(whereIs(p.x, p.z, this.cz, this.hz), alive);
       if (this.life === LIFE_DOWNED) this.ui.downed(true, (this.downUntil - now) / 1000);
@@ -930,6 +931,17 @@ function runBench() {
   perf.style.fontSize = '15px'; perf.style.color = '#fff';
   const camR = Number(new URLSearchParams(location.search).get('r')) || 34;
   const bq = new URLSearchParams(location.search);
+  if (bq.has('health')) {
+    $('br').style.display='block';
+    const ui=new UI(); let hp=100, armor=100, helmet=100, team=Number(bq.get('team')??2)%3;
+    const update=()=>{ui.setVitals(hp,30,90,'',false,'');ui.conditionHud.update(hp,armor,helmet,team,true);};
+    const controls=document.createElement('div');controls.style.cssText='position:fixed;top:8px;left:8px;z-index:1000;display:flex;gap:6px';
+    for(const [label,action] of [
+      ['Simular dano',()=>{hp=Math.max(0,hp-18);armor=Math.max(0,armor-28);helmet=Math.max(0,helmet-17);}],
+      ['Trocar time',()=>{team=(team+1)%3;}],['Restaurar',()=>{hp=armor=helmet=100;}],
+    ] as const){const button=document.createElement('button');button.textContent=label;button.onclick=()=>{action();update();};controls.append(button);}
+    document.body.append(controls);update();
+  }
   if (bq.has('kills')) {
     const confirmation = new KillConfirmation(), sound = new Sfx();
     const button = document.createElement('button'); button.textContent = 'Simular abate + cash';

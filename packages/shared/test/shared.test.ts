@@ -129,7 +129,7 @@ describe('protocolo', () => {
     const alive = new Uint8Array(ALIVE_MASK_BYTES); maskSet(alive, 5); maskSet(alive, 59);
     const buf = encodeSnapshot({
       tick: 900, ack: 42, alive,
-      own: { x: 10.5, y: 3.25, z: 700, vx: 1, vy: -2, vz: 3, hp: 87, life: LIFE_ALIVE, ammo: 30, reserve: 120, flags: 3, slot: 1, stamina: 0.5, stanceCd: 0.25 },
+      own: { x: 10.5, y: 3.25, z: 700, vx: 1, vy: -2, vz: 3, hp: 87, life: LIFE_ALIVE, ammo: 30, reserve: 120, flags: 3, slot: 1, stamina: 0.5, stanceCd: 0.25, armorCondition: 63, helmetCondition: 28 },
       ents: [{ id: 5, x: 812.4, y: 17.3, z: 44.9, yaw: 2.1, pitch: -0.4, life: 1, crouch: true, prone: true, sprint: false, marked: true, team: 2, armor: 3, helmet: 4, pack: 2, weapon: 7, shot: 250, hp: 66, suppressed: true }],
     });
     const s = decodeSnapshot(new DataView(buf));
@@ -139,6 +139,7 @@ describe('protocolo', () => {
     expect(e.id).toBe(5); expect(e.x).toBeCloseTo(812.4, 1); expect(e.y).toBeCloseTo(17.3, 1); expect(e.z).toBeCloseTo(44.9, 1);
     expect(e.yaw).toBeCloseTo(2.1, 1); expect(e.pitch).toBeCloseTo(-0.4, 1);
     expect(s.own.stamina).toBeCloseTo(0.5, 2); expect(s.own.stanceCd).toBeCloseTo(0.25, 2);
+    expect(s.own.armorCondition).toBe(63); expect(s.own.helmetCondition).toBe(28);
     expect(e.suppressed).toBe(true); expect(e.hp).toBe(66); expect(e.crouch).toBe(true); expect(e.prone).toBe(true); expect(e.marked).toBe(true); expect(e.team).toBe(2); expect(e.armor).toBe(3); expect(e.helmet).toBe(4); expect(e.pack).toBe(2);
     expect(e.weapon).toBe(7); expect(e.shot).toBe(250); expect(e.hp).toBe(66);
   });

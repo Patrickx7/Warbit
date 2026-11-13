@@ -214,6 +214,10 @@
 
 /* Minimal combat HUD and transparent in-match inventory. */
 #hptext,#hpbar,#stamrow,#perf,#helpkeys {display:none!important}
+#conditionHud {width:224px;margin:10px 0 0 auto;padding:6px 0 0 10px;background:linear-gradient(90deg,transparent,#0c12174d);color:#eee;text-shadow:0 1px 3px #000;font-variant-numeric:tabular-nums}
+.condition-track {height:3px;margin:0 32px 5px 0;background:#ffffff30;overflow:hidden}.condition-track i {display:block;height:100%;width:100%;background:#eee;transition:width .15s}
+.condition-values {display:flex;align-items:center;justify-content:flex-end;gap:12px}.condition-values>span {display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:11px;line-height:20px}.condition-values b {font-weight:500;min-width:27px;text-align:left}.condition-values svg {width:15px;height:15px;fill:currentColor;flex:none}
+.condition-values .missing {opacity:.35}.condition-values .worn {color:#e9bd6a}.condition-values .critical,.condition-track i.critical {color:#f17868}.condition-track i.critical {background:#f17868}.condition-values .team-badge {margin-left:1px}.team-badge svg {width:23px;height:23px}
 #board {background:rgba(30,37,36,.48)!important;backdrop-filter:blur(8px);pointer-events:auto!important}
 .inventory-nav {position:absolute;top:0;left:0;right:0;height:54px;display:flex;align-items:stretch;padding:0 5%;background:#181b1be8;border-bottom:1px solid #888;gap:5px}
 .inventory-nav strong {font-size:32px;padding:0 20px}.inventory-nav button {border:0;border-radius:0;border-bottom:3px solid #777;background:transparent;font-size:11px;letter-spacing:2px;padding:0 20px;color:#999}.inventory-nav button.active {color:#dcbb60;border-color:#c9a043;background:linear-gradient(transparent,#b894232b)}
@@ -301,6 +305,7 @@
   <div id="br">
     <div id="ammo">0 <small>/ 0</small></div>
     <div id="weapon"></div>
+    <div id="conditionHud" class="hidden" role="group" aria-label="Vida, proteções e time"></div>
     <div id="helpkeys">Botão direito: mirar · Esq.: atirar · Ctrl agachar · Z deitar · N zoom do mapa</div>
   </div>
   <div id="downed" class="hidden">

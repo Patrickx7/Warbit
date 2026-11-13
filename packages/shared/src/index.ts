@@ -10,3 +10,4 @@ export * from './nade';
 export * from './vehicles';
 
 export * from './inventory';
+export * from './protection';

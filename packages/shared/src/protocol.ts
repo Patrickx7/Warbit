@@ -77,6 +77,8 @@ export interface OwnState {
   slot: number;      // 0 principal, 1 secundária
   stamina: number;   // 0..1
   stanceCd: number;  // s
+  armorCondition: number; // 0..100, condição restante da armadura
+  helmetCondition: number; // 0..100, condição restante do capacete
 }
 
 export interface Snapshot {
@@ -88,7 +90,7 @@ export interface Snapshot {
 }
 
 export const ALIVE_MASK_BYTES = Math.ceil(MAX_PLAYERS / 8);
-const HEADER = 1 + 4 + 4 + 24 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + ALIVE_MASK_BYTES + 1;
+const HEADER = 1 + 4 + 4 + 24 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 2 + ALIVE_MASK_BYTES + 1;
 export const ENTITY_BYTES = 14;
 const Y_MIN = -40, Y_RANGE = 256;
 const TWO_PI = Math.PI * 2;
@@ -114,6 +116,8 @@ export function encodeSnapshot(s: Snapshot): ArrayBuffer {
   v.setUint8(o, s.own.slot); o += 1;
   v.setUint8(o, Math.max(0, Math.min(255, Math.round(s.own.stamina * 255)))); o += 1;
   v.setUint8(o, Math.max(0, Math.min(255, Math.round(s.own.stanceCd * 200)))); o += 1;
+  v.setUint8(o, Math.max(0, Math.min(100, Math.ceil(s.own.armorCondition)))); o += 1;
+  v.setUint8(o, Math.max(0, Math.min(100, Math.ceil(s.own.helmetCondition)))); o += 1;
   new Uint8Array(buf, o, ALIVE_MASK_BYTES).set(s.alive); o += ALIVE_MASK_BYTES;
   v.setUint8(o, n); o += 1;
   for (let i = 0; i < n; i++) {
@@ -144,8 +148,9 @@ export function decodeSnapshot(v: DataView): Snapshot {
     vx: v.getFloat32(o + 12), vy: v.getFloat32(o + 16), vz: v.getFloat32(o + 20),
     hp: v.getUint8(o + 24), life: v.getUint8(o + 25), ammo: v.getUint8(o + 26),
     reserve: v.getUint16(o + 27), flags: v.getUint8(o + 29), slot: v.getUint8(o + 30), stamina: v.getUint8(o + 31) / 255, stanceCd: v.getUint8(o + 32) / 200,
+    armorCondition: v.getUint8(o + 33), helmetCondition: v.getUint8(o + 34),
   };
-  o += 33;
+  o += 35;
   const alive = new Uint8Array(v.buffer.slice(v.byteOffset + o, v.byteOffset + o + ALIVE_MASK_BYTES)); o += ALIVE_MASK_BYTES;
   const n = v.getUint8(o); o += 1;
   const ents: EntityState[] = new Array(n);

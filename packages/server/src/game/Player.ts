@@ -28,6 +28,8 @@ export class Player {
   yaw = 0;
   pitch = 0;
   hp = 0;
+  armorDurability = 0;
+  helmetDurability = 0;
   sprinting = false;
 
   loadout: Loadout | null = null;
