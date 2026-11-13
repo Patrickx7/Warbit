@@ -116,15 +116,33 @@ export class ViewModel {
   private sightY = 0.085;
   private rearZ = 0.02;
   private aperture = { value: new THREE.Vector4() };
+  private apertureNormal = { value: new THREE.Vector3(0, 0, 1) };
   private apertureCenter = new THREE.Vector3();
   muzzle = new THREE.Vector3();
+
+  private maskThroughLens(material: THREE.MeshLambertMaterial) {
+    material.onBeforeCompile = shader => {
+      shader.uniforms.opticAperture = this.aperture;
+      shader.uniforms.opticApertureNormal = this.apertureNormal;
+      shader.vertexShader = 'varying vec3 opticViewPosition;\n' + shader.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\nopticViewPosition = mvPosition.xyz;');
+      shader.fragmentShader = 'uniform vec4 opticAperture;\nuniform vec3 opticApertureNormal;\nvarying vec3 opticViewPosition;\n' + shader.fragmentShader.replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+        if (opticAperture.w > 0.0 && opticViewPosition.z < -0.001) {
+          float denominator = dot(opticApertureNormal, opticViewPosition);
+          if (abs(denominator) > 0.00001) {
+            float t = dot(opticApertureNormal, opticAperture.xyz) / denominator;
+            if (t > 0.0 && distance(opticViewPosition * t, opticAperture.xyz) < opticAperture.w) discard;
+          }
+        }`);
+    };
+    return material;
+  }
 
   constructor(camera: THREE.Camera, sleeve: number) {
     const mk = () => {
       const g = new THREE.CylinderGeometry(0.045, 0.055, 0.42, 7);
       g.translate(0, -0.21, 0);
-      const m = new THREE.Mesh(g, mat(sleeve));
-      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.09, 0.08), mat(0x242424));
+      const m = new THREE.Mesh(g, this.maskThroughLens(mat(sleeve)));
+      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.09, 0.08), this.maskThroughLens(mat(0x242424)));
       hand.position.y = 0.02;
       m.add(hand);
       m.scale.setScalar(SCALE);
@@ -153,17 +171,8 @@ export class ViewModel {
       this.model = gm;
       const g = new THREE.Group();
       this.bodyMaterial?.dispose();
-      const bodyMaterial = this.bodyMaterial = GUN_MAT.clone();
+      const bodyMaterial = this.bodyMaterial = this.maskThroughLens(GUN_MAT.clone());
       // A lente mostra o cenário distante; partes da própria arma não entram no campo óptico.
-      bodyMaterial.onBeforeCompile = shader => {
-        shader.uniforms.opticAperture = this.aperture;
-        shader.vertexShader = 'varying vec3 opticViewPosition;\n' + shader.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\nopticViewPosition = mvPosition.xyz;');
-        shader.fragmentShader = 'uniform vec4 opticAperture;\nvarying vec3 opticViewPosition;\n' + shader.fragmentShader.replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
-          if (opticAperture.w > 0.0 && opticViewPosition.z < -0.001) {
-            vec2 lensPoint = opticViewPosition.xy * (opticAperture.z / opticViewPosition.z);
-            if (distance(lensPoint, opticAperture.xy) < opticAperture.w) discard;
-          }`);
-      };
       g.add(new THREE.Mesh(gm.body, bodyMaterial));
       this.ironsM = gm.irons ? new THREE.Mesh(gm.irons, GUN_MAT) : null;
       this.scopeM = gm.scopeGeo ? new THREE.Mesh(gm.scopeGeo, GUN_MAT) : null;
@@ -176,7 +185,7 @@ export class ViewModel {
     }
     this.sightId = sid;this.suppressed=suppressed;
     if(this.silencer){this.silencer.parent?.remove(this.silencer);this.silencer.geometry.dispose();(this.silencer.material as THREE.Material).dispose();this.silencer=null;}
-    if(suppressed){this.silencer=hollow(.023,.2,0x222526,0,0,this.model!.muzzleZ-.08);this.gun!.add(this.silencer);}
+    if(suppressed){this.silencer=hollow(.023,.2,0x222526,0,0,this.model!.muzzleZ-.08);this.maskThroughLens(this.silencer.material as THREE.MeshLambertMaterial);this.gun!.add(this.silencer);}
 
     const gm = this.model!;
     if (this.optic) { this.gun!.remove(this.optic); this.optic = null; }
@@ -226,11 +235,12 @@ export class ViewModel {
     );
     g.rotation.set(this.kick * 0.07 - this.dip * 0.7 + spr * 0.35, (0.03 * (1 - a) + this.swayX * 1.5) + spr * 0.5, 0);
     this.aperture.value.set(0, 0, 0, 0);
-    if (a > .95 && this.optic?.apertureRadius) {
+    if (this.optic?.aimed?.visible && this.optic.apertureRadius) {
       g.updateMatrix();
       this.apertureCenter.set(0, this.sightY, this.rearZ).applyMatrix4(g.matrix);
       const c = this.apertureCenter;
-      this.aperture.value.set(c.x, c.y, c.z, this.optic.apertureRadius * SCALE);
+      this.aperture.value.set(c.x, c.y, c.z, (this.optic.apertureRadius + .00075) * SCALE);
+      this.apertureNormal.value.set(0, 0, 1).applyQuaternion(g.quaternion);
     }
     // mãos
     this.armR.position.set(g.position.x + 0.01, g.position.y - 0.09, g.position.z + 0.03);
