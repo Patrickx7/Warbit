@@ -333,7 +333,7 @@ export class Match {
         }
         this.dismountPlayer(p);
         p.cash -= def.price;
-        this.sendTo(p,{t:'purchase',amount:def.price});
+        this.sendTo(p,{t:'purchase',amount:def.price,kind:'vehicle'});
         p.profileDirty = true; p.saveDirty = true;
         this.sendProfile(p);
 
@@ -454,7 +454,10 @@ export class Match {
     const specialist=lo.tools.filter(i=>['revive','defib','mark'].includes(i.tool ?? ''));
     if(specialist.length>1) return 'Escolha somente um especialista';
     const owned=new Set(loadoutIds(old));
-    let cost=loadoutIds(lo).filter(id=>!owned.has(id)).reduce((n,id)=>n+priceFor(ITEM_BY_ID[id],p.level),0);
+    const bought=loadoutIds(lo).filter(id=>!owned.has(id));
+    // som da compra no cliente: arma engatilhando se levou arma nova, zíper se foi só equipamento
+    const boughtKind: 'weapon' | 'gear' = bought.some(id=>!!ITEM_BY_ID[id].weapon && priceFor(ITEM_BY_ID[id],p.level)>0) ? 'weapon' : 'gear';
+    let cost=bought.reduce((n,id)=>n+priceFor(ITEM_BY_ID[id],p.level),0);
     const cap=cargoCapacity(lo);
     if(p.cargo.slice(cap).some(Boolean)) return 'Esvazie os espaços excedentes antes de trocar a mochila';
     const cargo=Array.from({length:cap},(_,i)=>p.cargo[i] ? {...p.cargo[i]!} : null);
@@ -476,7 +479,7 @@ export class Match {
     if(added('build')) p.builds=BUILD_USES;
     p.hasRevive=has('revive');p.hasDefib=has('defib');p.hasMark=has('mark');p.hasFob=has('fob');
     this.syncReserve(p);this.sendProfile(p);this.sendInventory(p,true);
-    if(cost>0)this.sendTo(p,{t:'purchase',amount:cost});
+    if(cost>0)this.sendTo(p,{t:'purchase',amount:cost,kind:boughtKind});
     this.sendTo(p,{t:'life',life:LIFE_ALIVE,tools:this.toolsMsg(p)});
     return null;
   }

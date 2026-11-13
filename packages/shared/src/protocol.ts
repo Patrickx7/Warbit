@@ -188,7 +188,7 @@ export type ServerMsg =
   | { t: 'hit'; dmg: number; head: boolean; kill: boolean }
   | { t: 'hurt'; x: number; z: number; dmg: number }
   | { t: 'life'; life: number; reason?: string; downLeft?: number; wait?: number; tools?: Record<string, number> }
-  | { t: 'purchase'; amount: number }
+  | { t: 'purchase'; amount: number; kind?: 'weapon' | 'gear' | 'vehicle' }
   | { t: 'shopError'; error: string }
   | { t: 'build'; add?: BoxMsg[]; remove?: number[] }
   | { t: 'nade'; id: number; x: number; y: number; z: number; vx: number; vy: number; vz: number; fuse: number }

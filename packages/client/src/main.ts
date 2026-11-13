@@ -212,14 +212,13 @@ class Game {
       case 'hit': this.ui.hitmarker(m.kill); this.sfx.hit(m.kill); break;
       case 'hurt': this.ui.hurt(); this.sfx.hurt(); break;
       case 'life': this.setLife(m.life, m.reason, m.downLeft, m.tools, m.wait); break;
-      case 'purchase': this.sfx.purchase(); break;
+      case 'purchase': this.sfx.purchase(m.kind); break;
       case 'shopError': this.ui.shopError(m.error); break;
       case 'build': this.applyBuild(m.add, m.remove); break;
       case 'nade': this.fx.addNade({ ...m, owner: -1 }); break;
       case 'boom': {
         this.fx.boom(m.x, m.y, m.z);
-        const c = this.gs.camera.position;
-        this.sfx.boom(Math.hypot(m.x - c.x, m.z - c.z), this.panOf(m.x, m.z));
+        this.sfx.boomAt(m.x, m.y, m.z);
         break;
       }
       case 'board': this.ui.board(m.rows, this.roster, this.myId); break;
@@ -238,8 +237,7 @@ class Game {
       }
       case 'vehicleBoom': {
         this.fx.flash(m.x, m.y + 0.5, m.z);
-        const c = this.gs.camera.position;
-        this.sfx.boom(Math.hypot(m.x - c.x, m.z - c.z), this.panOf(m.x, m.z));
+        this.sfx.boomAt(m.x, m.y, m.z);
         this.vehicleRenderer?.remove(m.id);
         break;
       }
@@ -383,7 +381,8 @@ class Game {
       this.fx.tracer(e.x + dir.x * 0.6, oy, e.z + dir.z * 0.6, dir.x, dir.y, dir.z, len);
     }
     if (dist < 220 && !e.suppressed) this.fx.flash(e.x + dir.x * 0.9, oy + dir.y * 0.9, e.z + dir.z * 0.9);
-    this.sfx.shot(kind, dist, this.panOf(e.x, e.z),e.suppressed);
+    // som 3D: direção, distância, atraso e abafado quando há parede/morro no caminho
+    this.sfx.gunshot(kind, { x: e.x, y: oy, z: e.z }, e.suppressed, dist > 8 && !this.world.hasLineOfSight(c.x, c.y, c.z, e.x, oy, e.z));
   }
 
   // ---------- entrada ----------
@@ -486,7 +485,7 @@ class Game {
         this.fx.tracer(tmpV.x, tmpV.y, tmpV.z, vx / vl, vy / vl, vz / vl, vl, len < 299);
       }
       if(!(this.slot===0?this.loadout?.suppressor:this.loadout?.secondarySuppressor)) this.fx.flash(tmpV.x, tmpV.y, tmpV.z);
-      this.sfx.shot(GUN_KIND[w.cls] ?? 0, 0, 0,!!(this.slot===0?this.loadout?.suppressor:this.loadout?.secondarySuppressor));
+      this.sfx.gunshot(GUN_KIND[w.cls] ?? 0, null, !!(this.slot===0?this.loadout?.suppressor:this.loadout?.secondarySuppressor));
       // recuo: sobe pouco, estabiliza e VOLTA sozinho quando para de atirar
       const stanceK = p.prone ? 0.55 : p.crouch ? 0.8 : 1;
       const kick = w.recoil * DEG * (ads ? 0.32 : 0.5) * stanceK / (1 + 0.22 * this.burst);
@@ -562,6 +561,7 @@ class Game {
       cam.fov = BASE_FOV * zoom;
     }
     cam.updateProjectionMatrix();
+    this.sfx.setListener(cam.position.x, cam.position.y, cam.position.z, this.yaw);
 
     // soldados
     const rtBase = now * (TICK_RATE / 1000) + this.tickOffset;

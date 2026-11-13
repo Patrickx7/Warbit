@@ -19,6 +19,167 @@ export class Sfx {
     } catch { this.ctx = null; }
   }
 
+  // ---------- som posicional (3D) ----------
+  private lx = 0; private ly = 0; private lz = 0;
+  private shots = 0;
+
+  /** posição e direção do ouvinte (câmera); chamar a cada quadro */
+  setListener(x: number, y: number, z: number, yaw: number) {
+    const c = this.ctx;
+    this.lx = x; this.ly = y; this.lz = z;
+    if (!c) return;
+    const l = c.listener, fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+    if (l.positionX) {
+      l.positionX.value = x; l.positionY.value = y; l.positionZ.value = z;
+      l.forwardX.value = fx; l.forwardY.value = 0; l.forwardZ.value = fz;
+      l.upX.value = 0; l.upY.value = 1; l.upZ.value = 0;
+    } else {
+      l.setPosition(x, y, z); l.setOrientation(fx, 0, fz, 0, 1, 0);
+    }
+  }
+
+  /**
+   * Saída 3D: HRTF dá a direção (esquerda/direita e frente/trás), o volume cai com a distância,
+   * e o som fica abafado de longe ou atrás de parede. Devolve o nó onde ligar as camadas do som.
+   */
+  private spatial(x: number, y: number, z: number, loud: number, occluded: boolean): { bus: GainNode; dist: number; delay: number } | null {
+    const c = this.ctx;
+    if (!c || !this.master) return null;
+    const dist = Math.hypot(x - this.lx, y - this.ly, z - this.lz);
+    const bus = c.createGain();
+    bus.gain.value = loud * (occluded ? 0.55 : 1);
+    const lp = c.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = Math.max(450, (occluded ? 1400 : 15000) / (1 + dist / 55));
+    const pan = c.createPanner();
+    pan.panningModel = 'HRTF'; pan.distanceModel = 'inverse';
+    pan.refDistance = 7; pan.rolloffFactor = 1.15; pan.maxDistance = 10000;
+    if (pan.positionX) { pan.positionX.value = x; pan.positionY.value = y; pan.positionZ.value = z; } else pan.setPosition(x, y, z);
+    bus.connect(lp).connect(pan).connect(this.master);
+    // o som demora a chegar: ~343 m/s (de longe você vê o clarão antes de ouvir)
+    return { bus, dist, delay: Math.min(1.2, dist / 343) };
+  }
+
+  private noiseLayer(out: AudioNode, t: number, type: BiquadFilterType, freq: number, q: number, vol: number, dur: number) {
+    const c = this.ctx!;
+    const src = c.createBufferSource(); src.buffer = this.noise;
+    const f = c.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+    const g = c.createGain();
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0006, t + dur);
+    src.connect(f).connect(g).connect(out);
+    src.start(t, Math.random() * 0.3, dur + 0.03);
+    return src;
+  }
+  private thump(out: AudioNode, t: number, f0: number, f1: number, vol: number, dur: number) {
+    const c = this.ctx!;
+    const o = c.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    const g = c.createGain();
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0006, t + dur);
+    o.connect(g).connect(out); o.start(t); o.stop(t + dur + 0.03);
+  }
+
+  /**
+   * Tiro em camadas (estalo + corpo + grave + cauda de eco).
+   * pos = null: é o seu próprio tiro (sem espacialização). kind 0 fuzil, 1 smg/escopeta, 2 precisão, 3 pistola.
+   */
+  gunshot(kind: number, pos: { x: number; y: number; z: number } | null, suppressed = false, occluded = false) {
+    const c = this.ctx;
+    if (!c || !this.noise || !this.master) return;
+    if (this.shots >= (pos ? 9 : 12)) return;
+    const loud = [1, 0.8, 1.35, 0.7][kind] ?? 1;
+    let out: AudioNode, t = c.currentTime, dist = 0;
+    if (pos) {
+      const sp = this.spatial(pos.x, pos.y, pos.z, loud * (suppressed ? 0.25 : 1.6), occluded);
+      if (!sp) return;
+      if (sp.dist > (suppressed ? 90 : 650)) return;
+      out = sp.bus; t += sp.delay; dist = sp.dist;
+    } else {
+      const g = c.createGain(); g.gain.value = loud * (suppressed ? 0.3 : 0.75); g.connect(this.master); out = g;
+    }
+    this.shots++;
+    const body = [850, 1300, 480, 1600][kind] ?? 850;
+    const len = [0.17, 0.12, 0.36, 0.1][kind] ?? 0.16;
+    let last: AudioBufferSourceNode;
+    if (suppressed) {
+      last = this.noiseLayer(out, t, 'bandpass', 1900, 1.4, 0.5, 0.07);
+      this.thump(out, t, 220, 90, 0.25, 0.05);
+    } else {
+      this.noiseLayer(out, t, 'highpass', 2600, 0.5, 0.9, 0.028);             // estalo
+      this.noiseLayer(out, t, 'bandpass', body, 0.7, 1.0, len);                 // corpo
+      this.thump(out, t, kind === 2 ? 130 : 170, 42, 0.9, kind === 2 ? 0.2 : 0.12); // grave
+      // cauda: eco de campo aberto, mais longa quanto mais longe (ajuda a perceber a distância)
+      last = this.noiseLayer(out, t + 0.02, 'lowpass', 1100, 0.3, 0.22, 0.45 + Math.min(0.9, dist / 250) + (kind === 2 ? 0.35 : 0));
+    }
+    last.onended = () => { this.shots--; };
+  }
+
+  /** explosão posicional */
+  boomAt(x: number, y: number, z: number) {
+    const c = this.ctx;
+    if (!c || !this.noise) return;
+    const sp = this.spatial(x, y, z, 3.2, false);
+    if (!sp) return;
+    const t = c.currentTime + sp.delay;
+    this.noiseLayer(sp.bus, t, 'highpass', 1800, 0.4, 0.8, 0.05);
+    this.noiseLayer(sp.bus, t, 'bandpass', 420, 0.5, 1.2, 0.5);
+    this.thump(sp.bus, t, 110, 28, 1.6, 0.7);
+    this.noiseLayer(sp.bus, t + 0.05, 'lowpass', 600, 0.3, 0.5, 1.6);
+  }
+
+  // ---------- sons de compra ----------
+  private cashRegister() {
+    const c = this.ctx;
+    if (!c || !this.noise || !this.master) return;
+    const t = c.currentTime;
+    // gaveta + moedas + sininho ("ka-ching")
+    this.noiseLayer(this.master, t, 'bandpass', 900, 1.2, 0.35, 0.05);
+    for (let i = 0; i < 4; i++) this.noiseLayer(this.master, t + 0.03 + i * 0.022, 'bandpass', 5200 + i * 700, 9, 0.22, 0.035);
+    this.tone(1975, 0.55, 0.16, 'triangle', 0.075);
+    this.tone(2637, 0.7, 0.13, 'sine', 0.085);
+    this.tone(3951, 0.4, 0.05, 'sine', 0.085);
+  }
+  /** arma engatilhando: puxa o ferrolho e solta ("clac-CLAC") */
+  private cock(delay: number) {
+    const c = this.ctx;
+    if (!c || !this.noise || !this.master) return;
+    const t = c.currentTime + delay;
+    this.noiseLayer(this.master, t, 'bandpass', 2300, 2.5, 0.5, 0.04);
+    this.noiseLayer(this.master, t + 0.004, 'highpass', 5200, 0.6, 0.25, 0.018);
+    this.noiseLayer(this.master, t + 0.05, 'bandpass', 1500, 6, 0.12, 0.09); // ferrolho deslizando
+    this.noiseLayer(this.master, t + 0.17, 'bandpass', 1450, 2, 0.75, 0.055);
+    this.noiseLayer(this.master, t + 0.172, 'highpass', 4200, 0.6, 0.35, 0.02);
+    this.thump(this.master, t + 0.17, 240, 110, 0.3, 0.05);
+  }
+  /** zíper fechando: chiado serrilhado que sobe de tom */
+  private zipper(delay: number) {
+    const c = this.ctx;
+    if (!c || !this.noise || !this.master) return;
+    const t = c.currentTime + delay, dur = 0.42;
+    const src = c.createBufferSource(); src.buffer = this.noise;
+    const f = c.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 2.2;
+    f.frequency.setValueAtTime(1700, t); f.frequency.exponentialRampToValueAtTime(5200, t + dur);
+    const teeth = c.createGain(); teeth.gain.value = 0.5;
+    const lfo = c.createOscillator(); lfo.type = 'square';
+    lfo.frequency.setValueAtTime(55, t); lfo.frequency.linearRampToValueAtTime(120, t + dur);
+    const depth = c.createGain(); depth.gain.value = 0.5;
+    lfo.connect(depth).connect(teeth.gain);
+    const env = c.createGain();
+    env.gain.setValueAtTime(0.0001, t); env.gain.linearRampToValueAtTime(0.42, t + 0.03);
+    env.gain.setValueAtTime(0.42, t + dur - 0.05); env.gain.exponentialRampToValueAtTime(0.0006, t + dur);
+    src.connect(f).connect(teeth).connect(env).connect(this.master);
+    src.start(t, 0, dur + 0.03); lfo.start(t); lfo.stop(t + dur + 0.03);
+    this.noiseLayer(this.master, t + dur, 'bandpass', 3000, 3, 0.3, 0.03); // puxador batendo no fim
+  }
+  /** compra confirmada pelo servidor: dinheiro + som do que foi comprado */
+  purchase(kind?: 'weapon' | 'gear' | 'vehicle') {
+    this.unlock();
+    this.cashRegister();
+    if (kind === 'weapon') this.cock(0.3);
+    else if (kind === 'gear') this.zipper(0.3);
+    else if (kind === 'vehicle') { this.tone(3100, 0.12, 0.08, 'triangle', 0.3); this.tone(3600, 0.14, 0.07, 'triangle', 0.36); this.tone(2900, 0.16, 0.06, 'triangle', 0.43); } // chaves
+  }
+
   private burst(freq: number, q: number, dur: number, vol: number, pan: number) {
     const c = this.ctx;
     if (!c || !this.noise || !this.master || this.voices > 14 || vol < 0.004) return;
@@ -79,7 +240,6 @@ export class Sfx {
   hit(kill: boolean) { this.tone(kill ? 1250 : 900, 0.07, 0.25, 'square'); if (kill) this.tone(1700, 0.1, 0.2, 'square', 0.06); }
   hurt() { this.burst(300, 1, 0.12, 0.5, 0); }
   cash() { this.tone(1320, 0.09, 0.14, 'triangle'); this.tone(1760, 0.16, 0.14, 'triangle', 0.07); }
-  purchase() { this.unlock(); this.tone(740,.07,.15,'triangle'); this.tone(1110,.12,.18,'triangle',.06); this.tone(1480,.15,.12,'sine',.13); }
   click() { this.tone(520, 0.04, 0.1, 'square'); }
   reload() { this.burst(2400, 3, 0.05, 0.25, 0); }
   alert() { this.tone(660, 0.18, 0.18, 'sawtooth'); this.tone(880, 0.25, 0.18, 'sawtooth', 0.16); }

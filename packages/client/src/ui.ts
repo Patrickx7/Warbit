@@ -1,5 +1,6 @@
 import { cargoCapacity, loadoutIds, MAGAZINE_PRICE, type Magazine } from '@warbit/shared';
 import { weaponIcon } from './render/itemIcons';
+import { gearIcon, magazineIcon } from './render/gearIcons';
 import {
   BoxKind, ITEMS, ITEM_BY_ID, MAX_TOOLS, SCORE_PER_PRESENCE_SECOND, SCORE_TO_WIN, Surface, TEAM_CSS, TEAM_NAMES, WORLD_SIZE, buildLoadout,
   levelFromXp, priceFor, xpForLevel, VEHICLES, VEHICLE_BY_ID, type VehicleState, type Item, type RosterEntry, type World, type Zone, type ZoneWhere, type WeaponStats, type Loadout,
@@ -51,12 +52,11 @@ const packSvg = (t: number) => t === 1
     ? '<rect x="24" y="8" width="32" height="22" rx="4"/><rect x="22" y="2" width="36" height="7" rx="3"/><rect x="18" y="14" width="6" height="12" rx="2"/><rect x="56" y="14" width="6" height="12" rx="2"/>'
     : '<rect x="22" y="4" width="36" height="26" rx="5"/><rect x="14" y="10" width="8" height="16" rx="2"/><rect x="58" y="10" width="8" height="16" rx="2"/><rect x="28" y="16" width="24" height="12" rx="2" fill="#7d6e3c"/><rect x="26" y="0" width="28" height="6" rx="2"/>';
 function silhouette(it: Item): string {
-  if (it.weapon) return `<img class="sil weapon-icon" alt="${esc(it.name)}" src="${weaponIcon(it.id)}">`;
-  if (it.tool) return `<svg class="sil" viewBox="0 0 80 40">${it.tool === 'mark' ? '<rect x="18" y="8" width="16" height="24" rx="5"/><rect x="46" y="8" width="16" height="24" rx="5"/><rect x="30" y="14" width="20" height="8"/>' : '<rect x="18" y="8" width="44" height="28" rx="4"/><path d="M35 11h10v8h8v8h-8v8H35v-8h-8v-8h8z" fill="#ddd"/>'}</svg>`;
+  if (it.weapon || it.slot === 'primary' || it.slot === 'secondary') return `<img class="sil weapon-icon" alt="${esc(it.name)}" src="${weaponIcon(it.id)}">`;
 
   if(it.slot==='suppressor'||it.slot==='secondarySuppressor')return '<svg class="sil" viewBox="0 0 80 30"><rect x="8" y="9" width="58" height="12" rx="4"/><path d="M18 10v10M26 10v10M34 10v10M42 10v10" stroke="#777"/></svg>';
   const body = it.sight ? sightSvg(it) : it.pack ? packSvg(it.pack) : '';
-  if (!body) return '';
+  if (!body) return gearIcon(it); // todo item tem ícone
   return `<svg viewBox="0 0 80 30" class="sil">${body}</svg>`;
 }
 
