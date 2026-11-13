@@ -1,4 +1,5 @@
 import type { Magazine } from './inventory';
+import type { RewardKind } from './rewards';
 import { MAX_PLAYERS, WORLD_SIZE } from './config';
 import type { VehicleState } from './vehicles';
 
@@ -183,7 +184,7 @@ export type ServerMsg =
   | { t: 'roster'; roster: RosterEntry[] }
   | { t: 'state'; phase: 'warmup' | 'live' | 'end'; timeLeft: number; scores: number[]; presence: number[]; control: number; cz: ZoneMsg; hz: ZoneMsg; hzIn: number; fobs: { team: number; x: number; z: number; hp: number }[]; winner: number; counts: number[] }
   | { t: 'profile'; cash: number; xp: number; level: number; lifeProfit: number; kills: number; deaths: number }
-  | { t: 'reward'; label: string; cash: number; xp: number }
+  | { t: 'reward'; kind: RewardKind; label: string; cash: number; xp: number }
   | { t: 'kill'; killer: number; victim: number; weapon: string; head: boolean; downed: boolean }
   | { t: 'hit'; dmg: number; head: boolean; kill: boolean }
   | { t: 'hurt'; x: number; z: number; dmg: number }

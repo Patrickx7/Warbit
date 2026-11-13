@@ -1,11 +1,12 @@
 import { Footsteps } from './footsteps';
+import { KillConfirmation } from './killConfirmation';
 import { getEquipmentVendorPos, Surface, type Magazine } from '@warbit/shared';
 import * as THREE from 'three';
 import {
   BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD, BTN2_SECONDARY, BTN2_USE, BTN3_FOB, BTN3_PRONE, BTN_BACK, BTN_CROUCH,
   BTN_FIRE, BTN_FWD, BTN_JUMP, BTN_LEFT, BTN_RIGHT, BTN_SPRINT, BoxKind, DT, ITEMS, ITEM_BY_ID, LIFE_ALIVE, LIFE_DOWNED, LIFE_NONE, MSG_SNAPSHOT,
   REVIVE_RANGE, SPRINT_FLAG_SPEED, TEAM_NAMES, TICK_RATE, World, aimDir, buildLoadout, decodeSnapshot, encodeInput, eyeHeight, maskHas,
-  newMoveState, stepMove, whereIs,
+  newMoveState, stepMove, whereIs, rewardFor,
   getVendorPos, stepVehicle, VEHICLE_BY_ID, type VehicleState,
   type ClientMsg, type EntityState, type Loadout, type MoveState, type OwnState, type RosterEntry, type ServerMsg, type Snapshot, type Zone,
 } from '@warbit/shared';
@@ -42,6 +43,7 @@ function lerpAngle(a: number, b: number, t: number) {
 class Game {
   ui = new UI();
   sfx = new Sfx();
+  killConfirmation = new KillConfirmation();
   footsteps = new Footsteps();
   inventoryPreview = new SoldierPreview($<HTMLCanvasElement>('inventoryPreview'));
   preview = new SoldierPreview($<HTMLCanvasElement>('preview'));
@@ -203,7 +205,12 @@ class Game {
         this.ui.setState(m, this.myTeam);
         break;
       case 'profile': this.ui.setProfile(m); break;
-      case 'reward': this.ui.reward(m.label, m.cash, m.xp); this.sfx.cash(); break;
+      case 'reward':
+        if (m.kind === 'kill' || m.kind === 'headshot') {
+          this.killConfirmation.add(m.kind, m.cash, m.xp);
+          if (m.kind === 'kill') this.sfx.killCash();
+        } else { this.ui.reward(m.label, m.cash, m.xp); this.sfx.cash(); }
+        break;
       case 'kill': {
         this.ui.feed(`${m.killer >= 0 ? this.name_(m.killer) : 'Zona'} <small>[${esc(m.weapon)}${m.head ? ' · cabeça' : ''}]</small> ${this.name_(m.victim)}`);
         if (m.victim === this.myId && m.killer >= 0) this.ui.center(`Derrubado por ${this.roster.get(m.killer)?.name ?? '?'}`);
@@ -254,6 +261,7 @@ class Game {
   private setLife(life: number, reason?: string, downLeft?: number, tools?: Record<string, number>, wait?: number) {
     const was = this.life;
     this.life = life;
+    if (life !== LIFE_ALIVE) this.killConfirmation.reset();
     if (life !== LIFE_ALIVE) {
       this.ui.show('board', false);this.ui.closeShop();
       if (this.myVehicleId !== -1) {
@@ -815,6 +823,13 @@ function runBench() {
   perf.style.fontSize = '15px'; perf.style.color = '#fff';
   const camR = Number(new URLSearchParams(location.search).get('r')) || 34;
   const bq = new URLSearchParams(location.search);
+  if (bq.has('kills')) {
+    const confirmation = new KillConfirmation(), sound = new Sfx();
+    const button = document.createElement('button'); button.textContent = 'Simular abate + cash';
+    button.style.cssText = 'position:fixed;top:4px;left:4px;z-index:1000';
+    button.onclick = () => { sound.unlock(); const r = rewardFor('kill', 'cz'); confirmation.add('kill', r.cash, r.xp); sound.killCash(); };
+    document.body.append(button);
+  }
   let vmRef: ViewModel | null = null, vmZoom = 1;
   if (bq.has('vm')) {
     const gunItem = ITEM_BY_ID[bq.get('gun') ?? 'fuzil_basico'];

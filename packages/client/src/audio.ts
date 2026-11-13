@@ -237,9 +237,21 @@ export class Sfx {
     this.burst(600, 0.4, 0.35, 0.6 * att, pan);
   }
 
-  hit(kill: boolean) { this.tone(kill ? 1250 : 900, 0.07, 0.25, 'square'); if (kill) this.tone(1700, 0.1, 0.2, 'square', 0.06); }
+  hit(kill: boolean) {
+    if (kill) { this.tone(280, .08, .09, 'sine'); return; }
+    this.tone(900, .07, .25, 'square');
+  }
   hurt() { this.burst(300, 1, 0.12, 0.5, 0); }
   cash() { this.tone(1320, 0.09, 0.14, 'triangle'); this.tone(1760, 0.16, 0.14, 'triangle', 0.07); }
+  killCash() {
+    const c = this.ctx;
+    if (!c || !this.master || !this.noise) return;
+    const t = c.currentTime;
+    this.thump(this.master, t, 145, 85, .14, .09);
+    this.noiseLayer(this.master, t, 'lowpass', 950, .5, .035, .045);
+    this.tone(587, .19, .10, 'sine', .025);
+    this.tone(784, .28, .075, 'triangle', .075);
+  }
   click() { this.tone(520, 0.04, 0.1, 'square'); }
   reload() { this.burst(2400, 3, 0.05, 0.25, 0); }
   alert() { this.tone(660, 0.18, 0.18, 'sawtooth'); this.tone(880, 0.25, 0.18, 'sawtooth', 0.16); }

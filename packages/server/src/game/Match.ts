@@ -489,7 +489,7 @@ export class Match {
     const r = rewardFor(kind, this.whereOf(p));
     p.cash += r.cash; p.xp += r.xp; p.lifeProfit += r.cash;
     p.profileDirty = true; p.saveDirty = true;
-    this.sendTo(p, { t: 'reward', label: r.label, cash: r.cash, xp: r.xp });
+    this.sendTo(p, { t: 'reward', kind, label: r.label, cash: r.cash, xp: r.xp });
   }
 
   // ---------- simulação ----------

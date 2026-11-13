@@ -4,7 +4,7 @@ import { gunModel, type GunModel } from './guns';
 
 const DARK = 0x1e2022;
 const SCALE = 0.72;
-type OpticModel = THREE.Group & { hip?: THREE.Group; aimed?: THREE.Group; eyeDistance?: number; rearZ?: number };
+type OpticModel = THREE.Group & { hip?: THREE.Group; aimed?: THREE.Group; eyeDistance?: number; rearZ?: number; apertureRadius?: number };
 
 const mat = (c: number) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
 const GUN_MAT = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
@@ -67,6 +67,7 @@ function buildOptic(it: Item, centerY: number, z: number): OpticModel {
       g.hip = hip; g.aimed = aimed; g.eyeDistance = compact ? .15 : .18; g.rearZ = z + len / 2 + .004;
       aimed.visible = false;
       const radius = compact ? .033 : .035, depth = compact ? .06 : .10, rear = g.rearZ;
+      g.apertureRadius = radius - .002;
       // O interior abre para a frente conforme a perspectiva: só a borda ocular fica aparente.
       const frontRadius = radius * (g.eyeDistance + depth * SCALE) / g.eyeDistance + .005;
       const wall = new THREE.Mesh(new THREE.CylinderGeometry(radius + .004, frontRadius, depth, 32, 1, true), new THREE.MeshLambertMaterial({ color: 0x17191a, side: THREE.DoubleSide }));
@@ -95,6 +96,7 @@ function buildOptic(it: Item, centerY: number, z: number): OpticModel {
 export class ViewModel {
   readonly group = new THREE.Group();
   private gun: THREE.Group | null = null;
+  private bodyMaterial: THREE.MeshLambertMaterial | null = null;
   private model: GunModel | null = null;
   private ironsM: THREE.Mesh | null = null;
   private scopeM: THREE.Mesh | null = null;
@@ -113,6 +115,8 @@ export class ViewModel {
   private dip = 0;
   private sightY = 0.085;
   private rearZ = 0.02;
+  private aperture = { value: new THREE.Vector4() };
+  private apertureCenter = new THREE.Vector3();
   muzzle = new THREE.Vector3();
 
   constructor(camera: THREE.Camera, sleeve: number) {
@@ -148,7 +152,19 @@ export class ViewModel {
       const gm = gunModel(item.id);
       this.model = gm;
       const g = new THREE.Group();
-      g.add(new THREE.Mesh(gm.body, GUN_MAT));
+      this.bodyMaterial?.dispose();
+      const bodyMaterial = this.bodyMaterial = GUN_MAT.clone();
+      // A lente mostra o cenário distante; partes da própria arma não entram no campo óptico.
+      bodyMaterial.onBeforeCompile = shader => {
+        shader.uniforms.opticAperture = this.aperture;
+        shader.vertexShader = 'varying vec3 opticViewPosition;\n' + shader.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\nopticViewPosition = mvPosition.xyz;');
+        shader.fragmentShader = 'uniform vec4 opticAperture;\nvarying vec3 opticViewPosition;\n' + shader.fragmentShader.replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+          if (opticAperture.w > 0.0 && opticViewPosition.z < -0.001) {
+            vec2 lensPoint = opticViewPosition.xy * (opticAperture.z / opticViewPosition.z);
+            if (distance(lensPoint, opticAperture.xy) < opticAperture.w) discard;
+          }`);
+      };
+      g.add(new THREE.Mesh(gm.body, bodyMaterial));
       this.ironsM = gm.irons ? new THREE.Mesh(gm.irons, GUN_MAT) : null;
       this.scopeM = gm.scopeGeo ? new THREE.Mesh(gm.scopeGeo, GUN_MAT) : null;
       if (this.ironsM) g.add(this.ironsM);
@@ -171,7 +187,7 @@ export class ViewModel {
     this.sightY = gm.sightY;
     this.rearZ = gm.rearZ;
     if (optical) {
-      const cy = gm.topY + 0.048, z = gm.rearZ - 0.06;
+      const cy = gm.topY + (sight!.sight!.kind === 'scope' && sight!.sight!.zoom >= .3 ? .065 : .048), z = gm.rearZ - 0.06;
       this.optic = buildOptic(sight!, cy, z);
       this.gun!.add(this.optic);
       this.sightY = cy;
@@ -209,6 +225,13 @@ export class ViewModel {
       hipZ + (adsZ - hipZ) * a + this.kick * 0.04,
     );
     g.rotation.set(this.kick * 0.07 - this.dip * 0.7 + spr * 0.35, (0.03 * (1 - a) + this.swayX * 1.5) + spr * 0.5, 0);
+    this.aperture.value.set(0, 0, 0, 0);
+    if (a > .95 && this.optic?.apertureRadius) {
+      g.updateMatrix();
+      this.apertureCenter.set(0, this.sightY, this.rearZ).applyMatrix4(g.matrix);
+      const c = this.apertureCenter;
+      this.aperture.value.set(c.x, c.y, c.z, this.optic.apertureRadius * SCALE);
+    }
     // mãos
     this.armR.position.set(g.position.x + 0.01, g.position.y - 0.09, g.position.z + 0.03);
     this.armR.rotation.set(-1.15, 0, -0.35);

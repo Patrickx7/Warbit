@@ -1,4 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import type { ServerMsg } from '../src/protocol';
+
+it('preserva o tipo e o valor confirmado da recompensa no JSON', () => {
+  const message: ServerMsg = { t: 'reward', kind: 'kill', label: 'Abate (Hot Zone x2)', cash: 4000, xp: 200 };
+  const decoded: ServerMsg = JSON.parse(JSON.stringify(message));
+  expect(decoded).toEqual(message);
+});
 import {
   BTN3_PRONE, BTN_FWD, BTN_JUMP, BTN_SPRINT, DT, ITEM_BY_ID, LIFE_ALIVE, World, buildLoadout, computePresence, controllingTeam, decodeInput,
   decodeSnapshot, encodeInput, encodeSnapshot, levelFromXp, newMoveState, pointsFor, priceFor, rewardFor, stepMove, whereIs, xpForLevel,
