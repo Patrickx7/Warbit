@@ -211,6 +211,7 @@ export type ClientMsg =
   | { t: 'moveMagazine'; from: number; to: number }
   | { t: 'inventory' }
   | { t: 'giveup' }
+  | { t: 'switchTeam'; team: number }
   | { t: 'loot' }
   | { t: 'inspectLoot' }
   | { t: 'swapLootWeapon'; target: number; revision: number; slot: number }

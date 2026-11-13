@@ -75,6 +75,7 @@ wss.on('connection', (ws: WebSocket) => {
         if (!player) { ws.send(JSON.stringify({ t: 'msg', text: 'Time escolhido ou servidor cheio. Escolha outro time.' })); ws.close(1008); }
         return;
       }
+      if (m.t === 'switchTeam') { if (player) { const np = match.switchTeam(player, Number(m.team)); if (np) player = np; } return; }
       if (player) match.onJson(player, m);
     } catch {
       /* mensagem inválida: ignora */

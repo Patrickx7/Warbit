@@ -27,7 +27,8 @@ const CATS: Cat[] = [
   { id: 'secondary', label: 'Arma secundária', match: (i) => i.slot === 'secondary' && !i.soon },
   { id: 'suppressor', label: 'Silenciadores', match: (i) => i.slot === 'suppressor' || i.slot === 'secondarySuppressor' },
   { id: 'sight', label: 'Miras', match: (i) => i.slot === 'sight' },
-  { id: 'armor', label: 'Proteção', match: (i) => (i.slot === 'armor' || i.slot === 'helmet' || i.slot === 'vest') && !i.soon },
+  { id: 'armor', label: 'Proteção', match: (i) => (i.slot === 'armor' || i.slot === 'helmet') && !i.soon },
+  { id: 'vest', label: 'Coletes táticos', match: (i) => i.slot === 'vest' && !i.soon },
   { id: 'pack', label: 'Mochilas', match: (i) => i.slot === 'pack' },
   { id: 'medic', label: 'Médico', match: (i) => i.slot === 'tool' && i.track === 'Médica' && !i.soon },
   { id: 'build', label: 'Construção', match: (i) => i.slot === 'tool' && i.track === 'Construção' && !i.soon },
@@ -101,7 +102,12 @@ export class UI {
     $('spawnBase').onclick = () => {
       if (Date.now() < this.waitUntil) return;
       const items = [...this.sel];
-      if (this.merchant) this.onBuyEquipment(items,[...this.pendingMags].map(([slot,weapon])=>({slot,weapon})));
+      if (this.merchant) {
+        const res = buildLoadout(items, this.profile.level, Infinity);
+        if (res.ok && !res.loadout.primary.empty && !this.magsFor(res.loadout.primary.id)
+          && !confirm(`Você vai comprar sem carregadores para a ${res.loadout.primary.name}. Comprar assim mesmo?`)) { this.section('ammo'); return; }
+        this.onBuyEquipment(items,[...this.pendingMags].map(([slot,weapon])=>({slot,weapon})));
+      }
       else this.onSpawn([]);
     };
     $('repeatBtn').onclick = () => {
@@ -346,7 +352,8 @@ export class UI {
   private section(section:string) {
     $('shop').classList.toggle('ammo-mode',section==='ammo');
     $('shop').classList.toggle('accessory-mode',section==='accessories');
-    const groups:Record<string,string[]>={weapons:['primary','smg','shotgun','lmg','dmr','sniper'],secondary:['secondary'],specialist:['medic','recon'],gear:['armor','pack','sight'],tools:['medic','build','recon','util','soon'],ammo:[],accessories:this.accessoryWeapon==='pistola'||ITEM_BY_ID[this.accessoryWeapon]?.slot==='secondary'?['suppressor']:['sight','suppressor']};
+    this.curSection=section;
+    const groups:Record<string,string[]>={pack:['pack'],vest:['vest'],weapons:['primary','smg','shotgun','lmg','dmr','sniper'],secondary:['secondary'],specialist:['medic','recon'],gear:['armor'],tools:['medic','build','recon','util','soon'],ammo:[],accessories:this.accessoryWeapon==='pistola'||ITEM_BY_ID[this.accessoryWeapon]?.slot==='secondary'?['suppressor']:['sight','suppressor']};
     const cats=groups[section]??groups.weapons;
     for(const b of Array.from($('tabs').children) as HTMLElement[]) b.classList.toggle('hidden',!cats.includes(b.dataset.cat!));
     for(const b of $('merchantSections').querySelectorAll<HTMLElement>('[data-section]')) b.classList.toggle('on',b.dataset.section===section);
@@ -356,7 +363,7 @@ export class UI {
     this.merchant=true; this.owned=new Set(lo ? loadoutIds(lo):[]);this.sel=new Set(this.owned);
     this.cargo=cargo;this.pendingMags.clear();this.waitUntil=0;
     $('shop').classList.remove('respawn-only');$('shopMsg').textContent='';
-    this.show('shop',true);this.section('weapons');this.renderShop();this.tickWait();
+    this.show('shop',true);this.section('pack');this.renderShop();this.tickWait();
   }
   setCargo(cargo:(Magazine|null)[]) { this.cargo=cargo; }
   rememberPurchase(items: string[], cargo: (Magazine|null)[]) {
@@ -425,7 +432,6 @@ export class UI {
 
   private toggle(it: Item) {
     if (it.slot === 'tool' && ['revive','defib','mark'].includes(it.tool ?? '')) { for (const id of this.sel) if (['revive','defib','mark'].includes(ITEM_BY_ID[id].tool ?? '') && id !== it.id) this.sel.delete(id); }
-    if (it.slot === 'primary' || it.slot === 'secondary' || it.slot === 'pack' || it.slot === 'vest') {this.pendingMags.clear();}
     if (this.sel.has(it.id)) { this.sel.delete(it.id); }
     else {
       if (it.slot !== 'tool') {
@@ -459,7 +465,9 @@ export class UI {
     const cat = CATS.find((c) => c.id === this.cat) ?? CATS[0];
     const primary = [...this.sel].map((id) => ITEM_BY_ID[id]).find((i) => i.slot === 'primary');
     const grid = document.createElement('div'); grid.className = 'grid'; root.appendChild(grid);
+    if (cat.id === 'sight' && (!primary || primary.empty)) grid.innerHTML = '<div class="hint">Escolha uma arma principal primeiro (passo 3): aqui aparecem só as miras que servem nela.</div>';
     for (const it of ITEMS.filter(cat.match)) {
+      if (it.sight && (!primary || primary.empty || (it.sight.sniperOnly && primary.weapon?.cls !== 'sniper'))) continue;
       const sniperLock = !!it.sight?.sniperOnly && (primary ?? ITEM_BY_ID.fuzil_basico).weapon?.cls !== 'sniper';
       const locked = !!it.soon || it.level > lvl;
       const price = priceFor(it, lvl);
@@ -470,7 +478,7 @@ export class UI {
         + `<div class="d">${esc(it.desc)}${sniperLock && !locked ? ' <b>(exige arma de precisão)</b>' : ''}</div>${it.weapon ? `<div class="bars">${bars(it.weapon)}</div>` : ''}`;
       if(this.cat==='suppressor' && it.slot !== (ITEM_BY_ID[this.accessoryWeapon]?.slot==='secondary'?'secondarySuppressor':'suppressor')) continue;
       if (!locked) d.onclick = () => {
-        if(it.weapon){ if(!this.sel.has(it.id))this.toggle(it);this.accessoryWeapon=it.id;this.section('accessories'); }
+        if(it.weapon){ if(!this.sel.has(it.id))this.toggle(it);this.accessoryWeapon=it.id;this.section('ammo'); }
         else this.toggle(it);
       };
       grid.appendChild(d);
@@ -502,12 +510,24 @@ export class UI {
     }
     if(res.ok) {
       const lo=res.loadout;
-      for(const [i] of this.pendingMags) if(i>=cargoCapacity(lo)){this.pendingMags.delete(i);}
+      // trocou mochila/colete/arma: mantém os carregadores do carrinho que ainda servem e os reacomoda nos espaços livres
+      // (antes tudo era apagado — escolher o colete tático sumia com a munição)
+      {
+        const cap=cargoCapacity(lo), guns=[lo.primary.id,lo.secondary.id];
+        const keep=[...this.pendingMags.entries()].sort((a,b)=>a[0]-b[0]).map(([,w])=>w).filter(w=>guns.includes(w));
+        this.pendingMags.clear();
+        for(let i=0;i<cap&&keep.length;i++) if(!this.cargo[i]) this.pendingMags.set(i,keep.shift()!);
+      }
       $('shopPackName').textContent=lo.pack?.name ?? 'SEM MOCHILA';
       $('shopCargo').innerHTML=this.cargoHtml(lo,true);
       const focused=[lo.primary,lo.secondary].find(w=>w.id===this.accessoryWeapon)??lo.primary;
       const weapons=($('shop').classList.contains('accessory-mode')?[focused]:[lo.primary,lo.secondary]).filter(w=>!w.empty);
       $('magazineShelf').innerHTML=weapons.map(w=>`<div class="ammo-product"><strong>${esc(w.name)}</strong><button draggable="true" data-mag="${w.id}" class="magazine">${magazineIcon()}<span>Carregador cheio · ${w.weapon!.mag} balas<br>${money(MAGAZINE_PRICE)}</span></button><small>Pronto para usar. Arraste para um espaço livre ou clique para adicionar.</small></div>`).join('');
+      const freeSlots=Array.from({length:cargoCapacity(lo)},(_,i)=>i).filter(i=>!this.cargo[i]&&!this.pendingMags.has(i));
+      if(!lo.primary.empty && freeSlots.length) {
+        $('magazineShelf').insertAdjacentHTML('afterbegin',`<button id="fillMags" class="primary">Encher os ${freeSlots.length} espaços livres com carregadores de ${esc(lo.primary.name)} · ${money(freeSlots.length*MAGAZINE_PRICE)}</button>`);
+        $('fillMags').onclick=()=>{for(const i of freeSlots)this.pendingMags.set(i,lo.primary.id);this.renderShop();};
+      } else if(!lo.primary.empty && !cargoCapacity(lo)) $('magazineShelf').insertAdjacentHTML('afterbegin','<div class="hint">Sem espaço para carregadores: compre uma mochila ou um colete (passos 1 e 2).</div>');
       for(const el of $('magazineShelf').querySelectorAll<HTMLElement>('[data-mag]')) {
         const weapon=el.dataset.mag!;
         el.ondragstart=e=>e.dataTransfer?.setData('text/plain','buy:'+weapon);
@@ -515,7 +535,7 @@ export class UI {
       }
       this.bindCargo($('shopCargo'),true);
       $('equipmentExtras').innerHTML=[lo.helmet,lo.armor,lo.vest,lo.pack,lo.sight,lo.suppressor,lo.secondarySuppressor,...lo.tools.filter(t=>!['revive','defib','mark'].includes(t.tool ?? ''))].filter(Boolean).map(i=>`<button data-remove="${i!.id}">${esc(i!.name)} ×</button>`).join('');
-      for(const b of $('equipmentExtras').querySelectorAll<HTMLElement>('[data-remove]')) b.onclick=()=>{this.sel.delete(b.dataset.remove!);this.pendingMags.clear();this.renderShop();};
+      for(const b of $('equipmentExtras').querySelectorAll<HTMLElement>('[data-remove]')) b.onclick=()=>{this.sel.delete(b.dataset.remove!);this.renderShop();};
     }
     const cost = res.ok ? loadoutIds(res.loadout).filter(id=>!this.owned.has(id)).reduce((n,id)=>n+priceFor(ITEM_BY_ID[id],lvl),0)+this.pendingMags.size*MAGAZINE_PRICE : 0;
     $('totalV').textContent = money(cost);
@@ -526,6 +546,56 @@ export class UI {
     ($('repeatBtn') as HTMLButtonElement).disabled = !this.lastBuy.length;
     $('repeatBtn').title = this.lastBuy.length ? this.lastBuy.map((id) => ITEM_BY_ID[id].name).join(', ') : 'Nenhuma compra anterior';
     ($('spawnBase') as HTMLButtonElement).dataset.bad = !res.ok || after < 0 ? '1' : '';
+    this.renderChecklist(res.ok ? res.loadout : null);
+  }
+
+  private curSection = 'pack';
+  private static readonly STEPS: { id: string; label: string }[] = [
+    { id: 'pack', label: '1 · Mochila' }, { id: 'vest', label: '2 · Colete' }, { id: 'weapons', label: '3 · Arma' }, { id: 'ammo', label: '4 · Munição' },
+    { id: 'accessories', label: '5 · Mira' }, { id: 'gear', label: '6 · Proteção' }, { id: 'tools', label: '7 · Itens' },
+  ];
+  /** carregadores (já guardados + no carrinho) da arma */
+  private magsFor(weaponId: string) {
+    return this.cargo.filter((m) => m?.weapon === weaponId).length + [...this.pendingMags.values()].filter((w) => w === weaponId).length;
+  }
+  /** Painel "o que falta": mostra cada passo com ✓ / ⚠ e leva até ele com um clique; botão Próximo segue a ordem. */
+  private renderChecklist(lo: Loadout | null) {
+    const el = $('shopChecklist');
+    if (!this.merchant || !lo) { el.replaceChildren(); for (const b of $('merchantSections').querySelectorAll('.next')) b.classList.remove('next'); return; }
+    const cap = cargoCapacity(lo);
+    const prim = lo.primary.empty ? null : lo.primary;
+    const mags = prim ? this.magsFor(prim.id) : 0;
+    const rows: { step: string; label: string; value: string; cls: string }[] = [
+      { step: 'pack', label: 'Mochila', value: lo.pack ? `${lo.pack.name} · ${cap} espaços` : `nenhuma · ${cap} espaço${cap === 1 ? '' : 's'}`, cls: lo.pack ? 'ok' : 'warn' },
+      { step: 'vest', label: 'Colete', value: lo.vest ? lo.vest.name : 'nenhum (opcional, mais espaço)', cls: lo.vest ? 'ok' : '' },
+      { step: 'weapons', label: 'Arma', value: prim ? prim.name : 'escolha uma arma', cls: prim ? 'ok' : 'bad' },
+      { step: 'ammo', label: 'Munição', value: !prim ? '—' : mags ? `${mags} carregador${mags > 1 ? 'es' : ''}` : 'SEM MUNIÇÃO', cls: !prim ? '' : mags ? 'ok' : 'bad' },
+      { step: 'accessories', label: 'Mira', value: lo.sight ? lo.sight.name : 'mira de ferro (opcional)', cls: lo.sight ? 'ok' : '' },
+      { step: 'gear', label: 'Proteção', value: [lo.helmet?.name, lo.armor?.name].filter(Boolean).join(' + ') || 'nenhuma (opcional)', cls: lo.helmet || lo.armor ? 'ok' : '' },
+    ];
+    const steps = UI.STEPS, idx = steps.findIndex((s) => s.id === this.curSection);
+    // próximo passo sugerido: o que é obrigatório e falta (arma, munição) vem antes da ordem normal
+    const want = !prim && !['weapons', 'pack', 'vest'].includes(this.curSection) ? 'weapons'
+      : prim && !mags && this.curSection !== 'ammo' ? 'ammo' : null;
+    const next = want ? steps.find((s) => s.id === want)! : idx >= 0 && idx < steps.length - 1 ? steps[idx + 1] : null;
+    // a aba do próximo passo pisca
+    for (const b of $('merchantSections').querySelectorAll<HTMLElement>('[data-section]')) b.classList.toggle('next', b.dataset.section === next?.id);
+    const hint = !prim ? 'Comece pela mochila e pelo colete (dão espaço para munição) e depois escolha a arma.'
+      : !mags ? 'Sua arma está sem munição! Vá em 4 · Munição e encha os espaços.' : 'Tudo pronto. Confira e clique em Confirmar compra.';
+    el.innerHTML = rows.map((r) => `<div class="ck ${r.cls}" data-step="${r.step}"><span>${r.label}</span><b>${esc(r.value)}</b></div>`).join('')
+      + `<div class="hint">${hint}</div>` + (next ? `<button id="shopNext">Próximo: ${next.label} ›</button>` : '');
+    for (const c of el.querySelectorAll<HTMLElement>('[data-step]')) c.onclick = () => this.section(c.dataset.step!);
+    if (next) $('shopNext').onclick = () => this.section(next.id);
+  }
+
+  /** Sair do comerciante: avisa se a compra não foi confirmada ou se a arma ficou sem munição. */
+  canLeave(): boolean {
+    if (!this.merchant || $('shop').classList.contains('hidden')) return true;
+    const changed = this.pendingMags.size > 0 || this.sel.size !== this.owned.size || [...this.sel].some((id) => !this.owned.has(id));
+    if (changed) return confirm('Você ainda não confirmou a compra. Sair e descartar o carrinho?');
+    const prim = [...this.owned].map((id) => ITEM_BY_ID[id]).find((i) => i?.slot === 'primary');
+    if (prim && !this.cargo.some((m) => m?.weapon === prim.id)) return confirm(`Sua ${prim.name} está sem carregadores de reserva. Sair mesmo assim?`);
+    return true;
   }
 
   // ---------- placar ----------

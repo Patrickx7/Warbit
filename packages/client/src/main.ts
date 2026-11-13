@@ -207,6 +207,19 @@ class Game {
     }
   }
 
+  /** Menu de pausa: trocar de time sem sair da partida. */
+  private renderTeamSwitch() {
+    const box = $('teamSwitch');
+    box.innerHTML = `<span style="color:var(--dim);font-size:12px">Trocar de time:</span>` + TEAM_NAMES.map((n, t) => t === this.myTeam ? ''
+      : `<button data-team="${t}" style="border-left:4px solid ${['#3b82f6', '#ef4444', '#22c55e'][t]}">${n}</button>`).join('');
+    for (const b of box.querySelectorAll<HTMLElement>('[data-team]')) b.onclick = () => {
+      const t = Number(b.dataset.team);
+      const inField = this.life !== LIFE_NONE;
+      if (!confirm(`Trocar para o time ${TEAM_NAMES[t]}?${inField ? '\nVocê sai de campo, recebe o valor do equipamento de volta e renasce na base do novo time.' : ''}`)) return;
+      this.send({ t: 'switchTeam', team: t });
+    };
+  }
+
   private onJson(m: ServerMsg) {
     switch (m.t) {
       case 'welcome':
@@ -219,6 +232,7 @@ class Game {
         this.life = LIFE_NONE; this.loadout = null; this.haveOffset = false;
         this.ui.show('menu', false); this.ui.show('hud', true);
         this.ui.openShop(`Você é do time ${TEAM_NAMES[this.myTeam]}. Entre na base e procure o comerciante.`);
+        this.renderTeamSwitch();
         break;
       case 'inventory': {
         const result=buildLoadout(m.items,99,Infinity);
@@ -777,7 +791,7 @@ class Game {
   bind() {
     addEventListener('keydown', (e) => {
       if (this.lootPanel.open) { e.preventDefault(); if (e.code === 'Escape') { this.lootPanel.hide(); this.lockInput(); } return; }
-      if (!$('shop').classList.contains('hidden') && this.life === LIFE_ALIVE) { if(e.code==='Escape') {this.ui.closeShop();this.lockInput();} return; }
+      if (!$('shop').classList.contains('hidden') && this.life === LIFE_ALIVE) { if(e.code==='Escape' && this.ui.canLeave()) {this.ui.closeShop();this.lockInput();} return; }
       if ((e.code === 'Tab' || e.code === 'KeyI') && this.ready && this.life !== LIFE_NONE) {
         e.preventDefault(); if (e.repeat) return;
         const opening = $('board').classList.contains('hidden');
@@ -889,7 +903,7 @@ class Game {
       }
       if (!this.ws) this.connect(name);
     };
-    $('closeMerchant').onclick=()=>{if(this.life===LIFE_ALIVE){this.ui.closeShop();this.lockInput();}};
+    $('closeMerchant').onclick=()=>{if(this.life===LIFE_ALIVE && this.ui.canLeave()){this.ui.closeShop();this.lockInput();}};
     this.ui.onBuyEquipment=(items,magazines)=>this.send({t:'buyEquipment',items,magazines});
     this.ui.onDiscardMagazine=slot=>this.send({t:'discardMagazine',slot});
     this.ui.onMoveMagazine=(from,to)=>this.send({t:'moveMagazine',from,to});

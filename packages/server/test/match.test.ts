@@ -209,18 +209,50 @@ describe('garupa e bots de quadriciclo', () => {
     expect(v.driverId).toBe(b.id);
     expect(v.passengerId).toBe(-1);
   });
-  it('bots compram o próprio quadriciclo e vão nele (com garupa)', () => {
+  it('metade dos bots vai de quadriciclo com garupa e chega rápido à Control Zone', () => {
     const m = new Match(world, null, { bots: true });
-    let used = 0, garupas = 0;
+    let used = 0, garupas = 0, inCzAt60 = 0, stuckQuit = 0;
+    const origLeave = m.dismountPlayer.bind(m);
+    const where: string[] = [];
+    m.dismountPlayer = (p) => {
+      if (p.bot && p.vehicleId !== -1 && p.life === 1 && p.brain && p.brain.rideStuckCount >= 4) {
+        stuckQuit++;
+        const b = m.world.bases[p.team];
+        where.push(`${Math.round(p.ms.x - b.x)},${Math.round(p.ms.z - b.z)}`);
+      }
+      origLeave(p);
+    };
     for (let i = 0; i < 90 * TICK_RATE; i++) {
       m.step();
       if (i % TICK_RATE === 0) {
         used = Math.max(used, m.players.filter((p) => p.bot && p.vehicleId !== -1).length);
         garupas = Math.max(garupas, [...m.vehicles.values()].filter((v) => v.passengerId !== -1).length);
       }
+      if (i === 60 * TICK_RATE) inCzAt60 = m.players.filter((p) => p.life !== 0 && Math.hypot(p.ms.x - m.cz.x, p.ms.z - m.cz.z) < m.cz.r).length;
     }
-    expect(used).toBeGreaterThanOrEqual(3);
-    expect(garupas).toBeGreaterThanOrEqual(1);
-    expect(m.vehicles.size).toBeLessThanOrEqual(18); // só os comprados
+    console.log(`quadriciclo: máx. ${used} bots montados · ${garupas} com garupa · ${inCzAt60} na CZ aos 60 s · ${stuckQuit} desistiram por empacar (pos. rel. à base: ${where.join(' ')}) · ${m.vehicles.size} veículos`);
+    expect(used).toBeGreaterThanOrEqual(15);    // metade de 60 = 30 riders; nem todos ao mesmo tempo
+    expect(garupas).toBeGreaterThanOrEqual(5);
+    expect(stuckQuit).toBeLessThanOrEqual(4);   // quase ninguém fica preso em obstáculo
+    expect(m.vehicles.size).toBeLessThanOrEqual(21); // até 7 por time
+  });
+});
+
+describe('troca de time no meio da partida', () => {
+  it('vai para outro time, devolve o equipamento e a vaga antiga vira bot', () => {
+    const m = new Match(world, null, { bots: false });
+    const c = conn();
+    const p = m.join(c, 'Patrick', undefined, 0)!;
+    p.respawnAt = 0;
+    expect(m.spawn(p, ['fuzil_padrao'])).toBeNull();
+    const cash = p.cash + p.loadout!.cost;
+    const np = m.switchTeam(p, 1)!;
+    expect(np).toBeTruthy();
+    expect(np.team).toBe(1);
+    expect(np.bot).toBe(false);
+    expect(np.conn).toBe(c);
+    expect(np.cash).toBe(cash);          // equipamento devolvido
+    expect(p.bot).toBe(true);            // a vaga antiga voltou a ser bot
+    expect(m.switchTeam(np, 2)).toBeNull(); // trocar de novo logo em seguida é bloqueado
   });
 });

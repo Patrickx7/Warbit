@@ -188,6 +188,30 @@ export class Match {
     p.prevB2 = 0;
     return null;
   }
+  /** Tira todo mundo de dentro e remove o veículo (sem explosão). */
+  despawnVehicle(id: number) {
+    const v = this.vehicles.get(id);
+    if (!v) return;
+    for (const pid of [v.driverId, v.passengerId]) if (pid !== -1) this.dismountPlayer(this.players[pid]);
+    this.vehicles.delete(id);
+    this.vehicleIdle.delete(id);
+    this.sendVehicles();
+  }
+  /** desde quando cada veículo está vazio e sem ninguém do time por perto */
+  private vehicleIdle = new Map<number, number>();
+  /** Veículo largado (vazio, sem aliado a menos de 40 m) some depois de 2 min: senão o mapa enche de quadriciclos. */
+  private cleanupVehicles(tick: number) {
+    let removed = false;
+    for (const v of [...this.vehicles.values()]) {
+      const busy = v.driverId !== -1 || v.passengerId !== -1
+        || this.players.some((q) => q.team === v.team && q.life === LIFE_ALIVE && (q.ms.x - v.x) ** 2 + (q.ms.z - v.z) ** 2 < 1600);
+      if (busy) { this.vehicleIdle.delete(v.id); continue; }
+      const since = this.vehicleIdle.get(v.id);
+      if (since === undefined) this.vehicleIdle.set(v.id, tick);
+      else if (tick - since > 120 * TICK_RATE) { this.vehicles.delete(v.id); this.vehicleIdle.delete(v.id); removed = true; }
+    }
+    if (removed) this.sendVehicles();
+  }
   whereOf(p: Player): ZoneWhere {
     return p.life === LIFE_NONE ? 'out' : whereIs(p.ms.x, p.ms.z, this.cz, this.hz);
   }
@@ -346,6 +370,33 @@ export class Match {
     this.sendTo(p, { t: 'vehicles', list: this.vehicleList() });
     this.broadcast({ t: 'roster', roster: this.roster() });
     return p;
+  }
+
+  /** última troca de time por conexão (evita ficar trocando sem parar) */
+  private switchedAt = new WeakMap<Conn, number>();
+  /**
+   * Troca de time no meio da partida: a vaga atual volta a ser bot e o jogador assume a vaga de um bot do outro time
+   * (o time de cada vaga é fixo). Quem estava em campo recebe o valor do equipamento de volta e espera o tempo de renascer.
+   * Devolve o novo Player (a conexão passa a apontar para ele) ou null se não deu.
+   */
+  switchTeam(p: Player, team: number): Player | null {
+    if (p.bot || !p.conn || !Number.isInteger(team) || team < 0 || team >= TEAM_COUNT || team === p.team) return null;
+    const conn = p.conn;
+    const last = this.switchedAt.get(conn) ?? -1e9;
+    if (this.tick - last < 15 * TICK_RATE) { this.sendTo(p, { t: 'msg', text: `Aguarde ${Math.ceil((last + 15 * TICK_RATE - this.tick) / TICK_RATE)}s para trocar de time de novo` }); return null; }
+    if (!this.players.some((q) => q.bot && q.team === team)) { this.sendTo(p, { t: 'msg', text: `Time ${TEAM_NAMES[team]} está cheio` }); return null; }
+    const wasInField = p.life !== LIFE_NONE;
+    if (wasInField && p.loadout) { p.cash += p.loadout.cost; p.profileDirty = true; } // devolve o equipamento, como na troca de rodada
+    const name = p.name, token = p.profile?.token, cash = p.cash, xp = p.xp;
+    this.leave(p); // desce do veículo, salva o perfil e a vaga volta a ser bot
+    const np = this.join(conn, name, token, team);
+    if (!np) return null;
+    if (!this.store) { np.cash = cash; np.xp = xp; } // sem banco (testes): mantém saldo e XP na memória
+    if (wasInField) np.respawnAt = this.tick + RESPAWN_SECONDS * TICK_RATE;
+    this.switchedAt.set(conn, this.tick);
+    this.sendProfile(np);
+    this.broadcast({ t: 'msg', text: `${name} foi para o time ${TEAM_NAMES[team]}` });
+    return np;
   }
 
   leave(p: Player) {
@@ -605,6 +656,7 @@ export class Match {
     const tick = this.tick;
     const alive: Player[] = [];
     if (this.drops.length) this.drops = this.drops.filter((d) => d.expireAt > tick);
+    this.cleanupVehicles(tick);
     for (const p of this.players) {
       if (this.botShouldRespawn(p)) this.die(p, 'Reforço imediato');
       if (p.life !== LIFE_ALIVE) continue;

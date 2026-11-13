@@ -23,6 +23,22 @@ function gauss(): number {
 }
 const yawTo = (dx: number, dz: number) => Math.atan2(-dx, -dz);
 
+/**
+ * Dentro do muro da base (quadrado de ±47 m com portões no meio de cada lado): devolve o próximo ponto para sair
+ * pelo portão mais alinhado com o destino. Primeiro alinha com o portão, depois atravessa. Fora da base devolve o destino.
+ */
+function gateWaypoint(base: { x: number; z: number }, x: number, z: number, tx: number, tz: number, lane = 4): { x: number; z: number } {
+  const bx = x - base.x, bz = z - base.z;
+  if (!(Math.abs(bx) < 47 && Math.abs(bz) < 47 && Math.hypot(tx - base.x, tz - base.z) > 50)) return { x: tx, z: tz };
+  const gx = tx - base.x, gz = tz - base.z;
+  const alongX = Math.abs(gx) > Math.abs(gz);
+  const gate = alongX ? Math.sign(gx) * 46 : Math.sign(gz) * 46;
+  const inLane = alongX ? Math.abs(bz) < lane : Math.abs(bx) < lane;
+  if (inLane) return alongX ? { x: base.x + gate * 1.25, z: base.z } : { x: base.x, z: base.z + gate * 1.25 };
+  // alinha: vai até a linha do portão sem se aproximar do muro
+  return alongX ? { x: base.x + Math.max(-30, Math.min(30, bx)), z: base.z } : { x: base.x, z: base.z + Math.max(-30, Math.min(30, bz)) };
+}
+
 /** quantos bots já estão indo reviver cada caído (evita 6 bots no mesmo corpo) */
 const reviveClaims = new Map<number, { by: number; until: number }[]>();
 
@@ -48,19 +64,23 @@ export class BotBrain {
   markAt = 0; fobAt = 0; buildAt = 0; proneUntil = 0;
   lookYaw = 0;
   seq = 0;
-  /** 3 bots por time (os primeiros) vão de quadriciclo até a Hot Zone */
-  /** 3 bots por time vão de quadriciclo: 2 compram e pilotam, 1 vai de garupa */
+  /** Metade de cada time (10 de 20) vai de quadriciclo: 5 compram e pilotam, 5 vão de garupa.
+   *  Dois pilotos por time vão direto para a Hot Zone; os outros entram na Control Zone. */
   readonly rider: boolean;
   readonly buyer: boolean;
+  readonly toHot: boolean;
   spawnedAt = 0;
   rideStart = 0; reverseUntil = 0; rideStuckX = 0; rideStuckZ = 0; rideStuckAt = 0;
+  rideStuckCount = 0; destX = 0; destZ = 0; hasDest = false;
+  avoidDir = 0; avoidUntil = 0; avoidSide = 1; turnSide = 1;
   hotPref = Math.random();
   hasFinal = false; finalX = 0; finalZ = 0; // destino final enquanto vai por um ponto de flanco
 
   constructor(readonly id: number) {
     const slot = Math.floor(id / 3);
-    this.rider = slot < 3;
-    this.buyer = slot === 0 || slot === 2;
+    this.rider = slot < 10;
+    this.buyer = this.rider && slot % 2 === 0;
+    this.toHot = slot === 0 || slot === 2;
   }
 
   // ---------- compra ----------
@@ -262,22 +282,18 @@ export class BotBrain {
       if (!v) { p.vehicleId = -1; return false; }
       if (v.driverId !== p.id) { this.send(m, p, 0, v.yaw); return true; } // garupa: só segue viagem
       if (v.passengerId === -1 && tick - this.rideStart < 30 * 8 && m.players.some((q) => q.bot && q.team === p.team && q.life === LIFE_ALIVE && q.vehicleId === -1
-        && q.brain?.rider && !q.brain.buyer && Math.hypot(q.ms.x - v.x, q.ms.z - v.z) < 60)) { this.send(m, p, BTN_JUMP, v.yaw); return true; }
-      const hz = m.hz, d = Math.hypot(hz.x - v.x, hz.z - v.z);
-      if (d < 65 || tick - this.rideStart > 30 * 70) { m.dismountPlayer(p); this.goalUntil = 0; this.nextThink = 0; return false; }
-      const want = yawTo(hz.x - v.x, hz.z - v.z);
-      const free = (a: number, len: number) => m.world.raycast(v.x, v.y + 0.8, v.z, -Math.sin(a), 0, -Math.cos(a), len) >= len - 0.05;
-      let target = want;
-      if (!free(want, 12)) for (const o of [0.5, -0.5, 1, -1, 1.6, -1.6]) if (free(want + o, 12)) { target = want + o; break; }
-      if (tick - this.rideStuckAt >= 30) {
-        if (Math.hypot(v.x - this.rideStuckX, v.z - this.rideStuckZ) < 2.5 && tick >= this.reverseUntil) this.reverseUntil = tick + 40;
-        this.rideStuckX = v.x; this.rideStuckZ = v.z; this.rideStuckAt = tick;
+        && q.brain?.rider && !q.brain.buyer && Math.hypot(q.ms.x - v.x, q.ms.z - v.z) < 60)) {
+        this.rideStuckAt = tick; this.rideStuckX = v.x; this.rideStuckZ = v.z; // esperando a garupa não é "empacado"
+        this.send(m, p, BTN_JUMP, v.yaw); return true;
       }
-      const diff = angDiff(target, v.yaw);
-      let b = diff > 0.08 ? BTN_LEFT : diff < -0.08 ? BTN_RIGHT : 0;
-      if (tick < this.reverseUntil) b = BTN_BACK | (diff > 0 ? BTN_RIGHT : BTN_LEFT);
-      else b |= BTN_FWD;
-      this.send(m, p, b, v.yaw);
+      // destino: Hot Zone (2 pilotos por time) ou um ponto dentro da Control Zone, do lado de onde o time vem
+      if (!this.hasDest) this.pickRideDest(m, p);
+      const tx = this.toHot ? m.hz.x : this.destX, tz = this.toHot ? m.hz.z : this.destZ;
+      const dDest = Math.hypot(tx - v.x, tz - v.z);
+      const inCz = Math.hypot(v.x - m.cz.x, v.z - m.cz.z) < m.cz.r * 0.75;
+      const arrived = this.toHot ? dDest < 40 : dDest < 15 || inCz;
+      if (arrived || this.rideStuckCount >= 4 || tick - this.rideStart > 30 * 90) { this.leaveVehicle(m, p); return false; }
+      this.send(m, p, this.driveButtons(m, p, v, tx, tz), v.yaw);
       return true;
     }
     if (!this.rider || m.phase === 'end' || tick - this.spawnedAt > 30 * 25) return false; // demorou: vai a pé
@@ -289,7 +305,7 @@ export class BotBrain {
     };
     const board = (v: VehicleState) => {
       if (Math.hypot(v.x - p.ms.x, v.z - p.ms.z) < 2.6) {
-        if (m.mountVehicle(p, v)) { this.rideStart = tick; this.rideStuckAt = tick; this.rideStuckX = v.x; this.rideStuckZ = v.z; }
+        if (m.mountVehicle(p, v)) this.startRide(m, p, v.x, v.z);
       } else walkTo(v.x, v.z);
       return true;
     };
@@ -316,13 +332,91 @@ export class BotBrain {
     if (best) return board(best);
     const price = VEHICLE_BY_ID.quad.price;
     let teamVehicles = 0;
-    for (const v of m.vehicles.values()) if (v.team === p.team) teamVehicles++;
-    if (p.cash < price + 300 || teamVehicles >= 6) return false;
+    for (const v of m.vehicles.values()) if (v.team === p.team && (v.driverId !== -1 || Math.hypot(v.x - base.x, v.z - base.z) < 80)) teamVehicles++;
+    if (p.cash < price + 300 || teamVehicles >= 7) return false;
     const vendor = getVendorPos(p.team, m.world);
     if (Math.hypot(vendor.x - p.ms.x, vendor.z - p.ms.z) > 18) { walkTo(vendor.x, vendor.z); return true; }
     if (m.buyVehicle(p, 'quad') !== null) { this.spawnedAt = -99999; return false; }
-    this.rideStart = tick; this.rideStuckAt = tick; this.rideStuckX = p.ms.x; this.rideStuckZ = p.ms.z;
+    this.startRide(m, p, p.ms.x, p.ms.z);
     return true;
+  }
+
+  private startRide(m: Match, p: Player, x: number, z: number) {
+    this.rideStart = m.tick; this.rideStuckAt = m.tick; this.rideStuckX = x; this.rideStuckZ = z;
+    this.rideStuckCount = 0; this.reverseUntil = 0; this.avoidUntil = 0; this.hasDest = false;
+    this.pickRideDest(m, p);
+  }
+
+  /** ponto de desembarque dentro da Control Zone, espalhado pelo lado de onde o time chega */
+  private pickRideDest(m: Match, p: Player) {
+    const cz = m.cz, base = m.world.bases[p.team];
+    const a = Math.atan2(base.z - cz.z, base.x - cz.x) + (Math.random() - 0.5) * 1.4;
+    const r = cz.r * (0.35 + Math.random() * 0.3);
+    this.destX = cz.x + Math.cos(a) * r; this.destZ = cz.z + Math.sin(a) * r; this.hasDest = true;
+  }
+
+  /** Chegou (ou desistiu): desce, e o quadriciclo some se só tinha bot nele — não fica largado pesando no servidor. */
+  private leaveVehicle(m: Match, p: Player) {
+    const v = m.vehicles.get(p.vehicleId);
+    const onlyBots = !!v && [v.driverId, v.passengerId].every((id) => id === -1 || m.players[id]?.bot);
+    if (v && onlyBots) m.despawnVehicle(v.id);
+    else m.dismountPlayer(p);
+    this.hasDest = false; this.goalUntil = 0; this.nextThink = 0; this.holding = false; this.hasFinal = false;
+  }
+
+  /**
+   * Pilotagem: sai da base pelo portão, olha à frente com 3 raios (centro e as duas laterais do quadriciclo),
+   * escolhe um desvio e se compromete com ele por um tempo (não fica balançando), reduz para fazer curva fechada
+   * e, se empacar, dá ré esterçando para o outro lado. Depois de 4 empacadas seguidas desiste e vai a pé.
+   */
+  private driveButtons(m: Match, p: Player, v: VehicleState, tx: number, tz: number): number {
+    const tick = m.tick;
+    const base = m.world.bases[p.team];
+    const wp = gateWaypoint(base, v.x, v.z, tx, tz, 1.6);
+    const want = yawTo(wp.x - v.x, wp.z - v.z);
+    const sp = Math.abs(v.speed);
+    const look = 6 + sp * 0.9;
+    const y = v.y + 0.7;
+    const free = (a: number, len: number) => {
+      const dx = -Math.sin(a), dz = -Math.cos(a), rx = Math.cos(a) * 0.85, rz = -Math.sin(a) * 0.85;
+      for (const k of [0, -1, 1]) if (m.world.raycast(v.x + rx * k, y, v.z + rz * k, dx, 0, dz, len) < len - 0.05) return false;
+      return true;
+    };
+    let target = tick < this.avoidUntil ? want + this.avoidDir : want;
+    if (!free(target, look)) {
+      if (tick < this.avoidUntil && free(want, look)) { target = want; this.avoidUntil = 0; }
+      else {
+        let found = false;
+        for (const o of [0.45, 0.9, 1.35, 1.8, 2.4]) {
+          for (const sgn of [this.avoidSide, -this.avoidSide]) {
+            if (free(want + sgn * o, look * 0.8)) { target = want + sgn * o; this.avoidDir = sgn * o; this.avoidSide = sgn; this.avoidUntil = tick + 24; found = true; break; }
+          }
+          if (found) break;
+        }
+        if (!found && tick >= this.reverseUntil) { this.reverseUntil = tick + 30; this.avoidSide = -this.avoidSide; }
+      }
+    }
+    // empacou (andou menos de 2 m em 1 s): ré esterçando, e troca o lado preferido do desvio
+    // durante a ré a referência acompanha o veículo: só mede 1,5 s DEPOIS da ré (senão a própria troca de
+    // sentido conta como "empacado" e ele entra num vai-e-volta sem fim)
+    if (tick < this.reverseUntil) { this.rideStuckX = v.x; this.rideStuckZ = v.z; this.rideStuckAt = tick; }
+    else if (tick - this.rideStuckAt >= 45) {
+      const moved = Math.hypot(v.x - this.rideStuckX, v.z - this.rideStuckZ);
+      if (moved < 2) { this.rideStuckCount++; this.reverseUntil = tick + 36; this.avoidSide = -this.avoidSide; this.avoidUntil = 0; }
+      else if (moved > 6) this.rideStuckCount = 0;
+      this.rideStuckX = v.x; this.rideStuckZ = v.z; this.rideStuckAt = tick;
+    }
+    let diff = angDiff(target, v.yaw);
+    // alvo quase atrás (±180°): o sinal da diferença alterna a cada tick e o quadriciclo não gira nunca, só vai e volta.
+    // Mantém o lado da curva até o alvo sair de trás.
+    if (Math.abs(diff) > 2.4) diff = this.turnSide * Math.abs(diff);
+    else this.turnSide = diff >= 0 ? 1 : -1;
+    if (tick < this.reverseUntil) return BTN_BACK | (diff > 0 ? BTN_RIGHT : BTN_LEFT); // de ré o volante inverte
+    let b = diff > 0.06 ? BTN_LEFT : diff < -0.06 ? BTN_RIGHT : 0;
+    // curva fechada: tira o pé (e freia se estiver rápido) para não abrir a curva no muro
+    if (Math.abs(diff) > 1.0 && sp > 7) b |= BTN_JUMP;
+    else if (Math.abs(diff) < 0.9 || sp < 4) b |= BTN_FWD;
+    return b;
   }
 
   // ---------- decisão por tick ----------

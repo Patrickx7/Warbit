@@ -233,6 +233,12 @@
 #shop .panel {position:relative;padding:0 4vw 24px 9vw;grid-template-columns:59% 35%;grid-template-rows:48px 28vh 7vh 30px minmax(0,1fr) 26px;gap:10px 6%;background:repeating-linear-gradient(0deg,transparent 0 23px,#ffffff02 24px),repeating-linear-gradient(90deg,transparent 0 23px,#ffffff02 24px),#1c201e}
 #shop header {grid-row:1;gap:8px;z-index:3;background:#171a18;border-bottom:1px solid #666;margin:0 -4vw 0 -9vw;padding:0 3vw}
 #shop header h2 {font-size:12px;max-width:180px}#closeMerchant {padding:4px 10px;border-radius:0;font-size:24px;background:#333}
+#shopChecklist {display:flex;flex-direction:column;gap:2px;margin:6px 0;font-size:11px}#shopChecklist .ck {display:flex;justify-content:space-between;gap:6px;padding:4px 6px;background:#ffffff0d;cursor:pointer;border-left:3px solid #555}#shopChecklist .ck:hover {background:#ffffff1a}#shopChecklist .ck.ok {border-color:#5fd35a}#shopChecklist .ck.warn {border-color:#f1c232;background:#f1c23214}#shopChecklist .ck.bad {border-color:#e74c3c;background:#e74c3c1f}#shopChecklist .ck b {font-weight:600;color:#e6eee8;text-align:right}#shopChecklist .ck.bad b {color:#ff8a7a}#shopChecklist .ck.warn b {color:#f5d36a}#shopChecklist .hint {padding:6px;color:#c9d6cf;line-height:1.35}#shopNext {margin-top:4px;width:100%;animation:shopPulse 1.1s ease-in-out infinite}
+#merchantSections button.next {position:relative;color:#ffd75a;animation:shopPulse 1.1s ease-in-out infinite}
+#merchantSections button.next::after {content:'▼';position:absolute;top:-2px;left:50%;transform:translateX(-50%);font-size:9px;color:#ffd75a;animation:shopBounce 1.1s ease-in-out infinite}
+@keyframes shopPulse {0%,100% {box-shadow:inset 0 0 0 1px #ffd75a00;background:#ffd75a00} 50% {box-shadow:inset 0 0 0 2px #ffd75acc;background:#ffd75a2e}}
+@keyframes shopBounce {0%,100% {transform:translate(-50%,-3px)} 50% {transform:translate(-50%,1px)}}
+@media (prefers-reduced-motion:reduce) {#shopNext,#merchantSections button.next,#merchantSections button.next::after {animation:none}}#fillMags {display:block;margin:8px 0;width:100%}
 #merchantSections {display:flex;height:100%;gap:4px}#merchantSections button {background:transparent;border:0;border-bottom:3px solid #888;border-radius:0;font-size:10px;letter-spacing:1px;padding:0 10px}#merchantSections button.on {color:#d4af46;border-color:#c5a03c;background:#a6801c18}#shopMsg {display:none}
 #equipment {grid-row:2;margin-top:5vh}#slots {display:grid;grid-template-columns:repeat(3,1fr);padding:12px;gap:12px;overflow:visible;background:transparent}
 #shop .slot {display:flex;flex-direction:column;position:relative;align-items:stretch;justify-content:center;padding:8px;border:1px solid #7777;cursor:pointer}
@@ -333,7 +339,7 @@
 <div id="shop" class="screen hidden">
   <div class="panel">
     <header>
-      <button id="closeMerchant" aria-label="Fechar comerciante">❮</button><h2>Comerciante de equipamento</h2><nav id="merchantSections"><button data-section="weapons">EQUIPAMENTO</button><button data-section="accessories">ACESSÓRIOS</button><button data-section="gear">APETRECHOS</button><button data-section="tools">ITENS</button><button data-section="ammo">MUNIÇÃO</button></nav>
+      <button id="closeMerchant" aria-label="Fechar comerciante">❮</button><h2>Comerciante de equipamento</h2><nav id="merchantSections"><button data-section="pack">1 · MOCHILA</button><button data-section="vest">2 · COLETE</button><button data-section="weapons">3 · ARMA</button><button data-section="ammo">4 · MUNIÇÃO</button><button data-section="accessories">5 · MIRA</button><button data-section="gear">6 · PROTEÇÃO</button><button data-section="tools">7 · ITENS</button></nav>
       <span id="shopMsg"></span>
       <span class="sp"></span>
       <span>Conta <b id="shopCash">$0</b></span>
@@ -343,6 +349,7 @@
     <aside id="cart">
       <h3>Seu equipamento</h3>
       <canvas id="preview"></canvas><div id="shopPackPanel"><h3>MOCHILA</h3><span id="shopPackName"></span><div id="shopCargo"></div></div>
+      <div id="shopChecklist"></div>
       <div class="tot"><span>Total desta compra</span><b id="totalV">$0</b></div>
       <div class="tot"><span>Saldo depois</span><b id="afterV">$0</b></div>
       <div id="shopErr"></div>
@@ -364,7 +371,7 @@
 </div>
 
 <div id="paused" class="screen hidden">
-  <div class="panel"><h2 style="margin-top:0">Pausado</h2><p style="color:var(--dim)">A partida continua rolando.</p><button id="resume" class="primary">Voltar ao jogo</button></div>
+  <div class="panel"><h2 style="margin-top:0">Pausado</h2><p style="color:var(--dim)">A partida continua rolando.</p><button id="resume" class="primary">Voltar ao jogo</button><div id="teamSwitch" style="margin-top:14px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center"></div></div>
 </div>
 
 <div id="vehicleShop" class="screen hidden">
