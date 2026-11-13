@@ -17,10 +17,11 @@ FPS multiplayer leve no navegador: 60 jogadores, 3 times, Control Zone + Hot Zon
 - `packages/client` — Three.js. `render/soldiers.ts` (soldado low-poly instanciado por parte, animação procedural), `render/scene.ts`, `main.ts` (rede, predição, interpolação), `ui.ts` (HUD e loja)
 
 ## Controles e regras de jogo (decisões do dono do projeto)
-- Ritmo de simulador, como o WarDogs: **todos nascem na base** e vão a pé até a zona (10 s de espera para renascer); sem escolha de local de spawn. Fôlego limita a corrida; não se atira correndo.
+- Ritmo de simulador, como o WarDogs: **todos nascem na base** e vão a pé até a zona; sem escolha de local de spawn. Jogadores podem renascer sem espera após desistir da reanimação. Bots mantêm seus kits, munição e intervalo anterior de renascimento. Fôlego limita a corrida; não se atira correndo.
+- **Jogadores nascem desarmados**, sem fuzil nem pistola automáticos; equipam-se no comerciante ou saqueiam armas de corpos inimigos. Bots continuam comprando seus kits ao nascer.
 - **Sem cruz de mira**: o tiro só é preciso mirando com o **botão direito**. A mira de ferro/óptica alinha de verdade no centro da tela; o recuo volta ao ponto de origem.
 - Posturas: **C** agacha, **Z** deita (3 posturas, hitbox próprio do deitado no servidor).
-- **A loja nunca vem pré-selecionada** — o jogador clica item por item (há "Repetir última compra", mas só age ao clicar). Miras são itens à venda.
+- **A loja nunca vem pré-selecionada** — o jogador clica item por item. **Recomprar último equipamento** existe só no comerciante: restaura o último equipamento e os carregadores comprados para revisão, e cobra ao confirmar. Não aparece na tela de renascimento. Miras são itens à venda.
 - **FOB** (tecla F, item Kit de FOB): caixa de suprimentos do time com munição e cura; não é ponto de nascimento.
 - Minimapa gira com o jogador; **N** troca o zoom (Shift+N inverte).
 - **Não usar Ctrl como tecla de jogo** (Ctrl+W fecha a aba). Tela cheia é opcional no menu — neste navegador embutido ela derruba a aba.

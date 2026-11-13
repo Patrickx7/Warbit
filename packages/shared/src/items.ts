@@ -41,6 +41,7 @@ export interface Item {
   tool?: ToolKind;
   sight?: { zoom: number; kind: SightKind; sniperOnly?: boolean }; // zoom = multiplicador de FOV ao mirar (menor = mais aproximado)
   soon?: boolean;     // listado, mas ainda não disponível (Fase 2)
+  empty?: boolean;    // espaço de arma vazio; não é item da loja
 }
 
 type Def = Omit<Item, 'idx'>;
@@ -127,6 +128,9 @@ const DEFS: Def[] = [
 
 export const ITEMS: Item[] = DEFS.map((d, idx) => ({ ...d, idx }));
 export const ITEM_BY_ID: Record<string, Item> = Object.fromEntries(ITEMS.map((i) => [i.id, i]));
+export const EMPTY_WEAPON_INDEX = 255;
+const EMPTY_PRIMARY: Item = { id:'sem_arma_principal',idx:EMPTY_WEAPON_INDEX,name:'Sem arma',slot:'primary',track:'Básico',price:0,level:0,desc:'',empty:true,weapon:W('rifle',0,1,0,1,0,0,false,0,0,0,0,0,1) };
+const EMPTY_SECONDARY: Item = { ...EMPTY_PRIMARY,id:'sem_arma_reserva',slot:'secondary',weapon:{...EMPTY_PRIMARY.weapon!,cls:'pistol'} };
 
 export const FREE_PRIMARY = 'fuzil_basico';
 export const FREE_SECONDARY = 'pistola';
@@ -185,8 +189,8 @@ export function buildLoadout(ids: string[], level: number, cash: number): Loadou
   }
   if (tools.length > MAX_TOOLS) return { ok: false, error: `No máximo ${MAX_TOOLS} ferramentas` };
   if (tools.some((t) => t.tool === 'revive') && tools.some((t) => t.tool === 'defib')) return { ok: false, error: 'Reanimador e desfibrilador não combinam' };
-  primary ??= ITEM_BY_ID[FREE_PRIMARY];
-  secondary ??= ITEM_BY_ID[FREE_SECONDARY];
+  primary ??= EMPTY_PRIMARY;
+  secondary ??= EMPTY_SECONDARY;
   if (sight?.sight?.sniperOnly && primary.weapon?.cls !== 'sniper') return { ok: false, error: `${sight.name} só serve em arma de precisão` };
   const all = [primary, secondary, armor, helmet, vest, sight, pack, suppressor, secondarySuppressor, ...tools].filter(Boolean) as Item[];
   const cost = all.reduce((s, it) => s + priceFor(it, level), 0);

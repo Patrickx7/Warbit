@@ -81,6 +81,7 @@ export class UI {
   onMoveMagazine: (from:number,to:number)=>void = ()=>{};
 
   private lastBuy: string[] = [];
+  private lastMagazines: {slot:number;weapon:string}[] = [];
   private waitUntil = 0;
   private centerTimer = 0;
   private hitTimer = 0;
@@ -96,15 +97,23 @@ export class UI {
 
   constructor() {
     try { this.lastBuy = (JSON.parse(localStorage.getItem('warbit.lastBuy') ?? '[]') as string[]).filter((id) => ITEM_BY_ID[id]); } catch { /* sem armazenamento */ }
+    try { const saved=JSON.parse(localStorage.getItem('warbit.lastMagazines')??'[]');if(Array.isArray(saved))this.lastMagazines=saved.filter(m=>m&&Number.isInteger(m.slot)&&m.slot>=0&&m.slot<16&&!!ITEM_BY_ID[m.weapon]?.weapon).slice(0,16); } catch { /* sem armazenamento */ }
     $('spawnBase').onclick = () => {
       if (Date.now() < this.waitUntil) return;
       const items = [...this.sel];
-      this.lastBuy = items;
-      try { localStorage.setItem('warbit.lastBuy', JSON.stringify(items)); } catch { /* ignora */ }
       if (this.merchant) this.onBuyEquipment(items,[...this.pendingMags].map(([slot,weapon])=>({slot,weapon})));
       else this.onSpawn([]);
     };
-    $('repeatBtn').onclick = () => { this.sel = new Set(this.lastBuy.filter((id) => this.available(ITEM_BY_ID[id]))); this.renderShop(); };
+    $('repeatBtn').onclick = () => {
+      if (!this.merchant) return;
+      this.sel = new Set(this.lastBuy.filter(id => this.available(ITEM_BY_ID[id])));
+      this.pendingMags.clear();
+      const result = buildLoadout([...this.sel], this.profile.level, Infinity);
+      if (result.ok) for (const m of this.lastMagazines) {
+        if (m.slot < cargoCapacity(result.loadout) && !this.cargo[m.slot] && [result.loadout.primary.id,result.loadout.secondary.id].includes(m.weapon)) this.pendingMags.set(m.slot,m.weapon);
+      }
+      this.renderShop();
+    };
     $('clearBtn').onclick = () => { this.pendingMags.clear(); this.sel = new Set(this.owned); this.renderShop(); };
     $('closeVehShop').onclick = () => this.closeVehicleShop();
     for(const b of $('merchantSections').querySelectorAll<HTMLElement>('[data-section]')) b.onclick=()=>this.section(b.dataset.section!);
@@ -329,7 +338,14 @@ export class UI {
     this.show('shop',true);this.section('weapons');this.renderShop();this.tickWait();
   }
   setCargo(cargo:(Magazine|null)[]) { this.cargo=cargo; }
+  rememberPurchase(items: string[], cargo: (Magazine|null)[]) {
+    this.lastBuy=items.filter(id=>!!ITEM_BY_ID[id]);
+    this.lastMagazines=cargo.flatMap((m,slot)=>m?[{slot,weapon:m.weapon}]:[]);
+    try { localStorage.setItem('warbit.lastBuy',JSON.stringify(this.lastBuy));localStorage.setItem('warbit.lastMagazines',JSON.stringify(this.lastMagazines)); } catch { /* sem armazenamento */ }
+  }
   openShop(msg: string, waitSeconds = 0) {
+    $('shop').classList.remove('ammo-mode', 'accessory-mode');
+    $('magazineShelf').replaceChildren();
     this.merchant=false;$('shop').classList.add('respawn-only');this.pendingMags.clear();
 
     $('shopMsg').textContent = msg;
@@ -342,7 +358,7 @@ export class UI {
   }
   inventory(lo: Loadout | null) {
     const card = (label: string, it?: Item) => `<div class="inventory-slot">${it ? silhouette(it) : '<div class="empty-outline"></div>'}<span>${esc(label)}</span><b>${it ? esc(it.name) : 'VAZIO'}</b></div>`;
-    $('inventoryEquipment').innerHTML = card('ARMA PRIMÁRIA', lo?.primary) + card('ARMA RESERVA', lo?.secondary)
+    $('inventoryEquipment').innerHTML = card('ARMA PRIMÁRIA', lo?.primary.empty ? undefined : lo?.primary) + card('ARMA RESERVA', lo?.secondary.empty ? undefined : lo?.secondary)
       + card('ESPECIALISTA', lo?.tools[0]) + `<div class="inventory-gear">${card('CAPACETE',lo?.helmet)}${card('ARMADURA',lo?.armor)}${card('COLETE',lo?.vest)}</div>`;
     $('inventoryPack').innerHTML = card('MOCHILA',lo?.pack) + (lo ? this.cargoHtml(lo,false) : '') + `<div class="inventory-gear">${(lo?.tools ?? []).map(i => card('ITEM', i)).join('')}</div>`;
     this.bindCargo($('inventoryPack'),false);
@@ -447,8 +463,8 @@ export class UI {
     if (res.ok) {
       const lo = res.loadout;
       const pick = (slot: string) => [...this.sel].map((id) => ITEM_BY_ID[id]).find((i) => i.slot === slot);
-      rows.push({ label: 'Principal', item: lo.primary });
-      rows.push({ label: 'Arma reserva', item: lo.secondary });
+      rows.push({ label: 'Principal', item: lo.primary.empty ? undefined : lo.primary });
+      rows.push({ label: 'Arma reserva', item: lo.secondary.empty ? undefined : lo.secondary });
       rows.push({ label: 'Especialista', item: lo.tools.find(t=>['revive','defib','mark'].includes(t.tool ?? '')) });
     }
     slots.innerHTML = rows.map((r) => {
@@ -469,7 +485,7 @@ export class UI {
       $('shopPackName').textContent=lo.pack?.name ?? 'SEM MOCHILA';
       $('shopCargo').innerHTML=this.cargoHtml(lo,true);
       const focused=[lo.primary,lo.secondary].find(w=>w.id===this.accessoryWeapon)??lo.primary;
-      const weapons=$('shop').classList.contains('accessory-mode')?[focused]:[lo.primary,lo.secondary];
+      const weapons=($('shop').classList.contains('accessory-mode')?[focused]:[lo.primary,lo.secondary]).filter(w=>!w.empty);
       $('magazineShelf').innerHTML=weapons.map(w=>`<div class="ammo-product"><strong>${esc(w.name)}</strong><button draggable="true" data-mag="${w.id}" class="magazine">${magazineIcon()}<span>Carregador cheio · ${w.weapon!.mag} balas<br>${money(MAGAZINE_PRICE)}</span></button><small>Pronto para usar. Arraste para um espaço livre ou clique para adicionar.</small></div>`).join('');
       for(const el of $('magazineShelf').querySelectorAll<HTMLElement>('[data-mag]')) {
         const weapon=el.dataset.mag!;

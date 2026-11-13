@@ -388,7 +388,7 @@ export class Soldiers {
     }
 
     // arma
-    if (!p.downed && !(far && p.dist > 260)) {
+    if (!p.downed && ITEMS[p.gun]?.weapon && !(far && p.dist > 260)) {
       const gm = this.gunMesh(p.gun);
       const g = gm.im;
       const gi = gm.n++;

@@ -178,10 +178,10 @@ describe('recompensas', () => {
 });
 
 describe('loja', () => {
-  it('kit gratuito sempre disponível', () => {
+  it('sem seleção fica desarmado', () => {
     const r = buildLoadout([], 1, 0);
     expect(r.ok).toBe(true);
-    if (r.ok) { expect(r.loadout.cost).toBe(0); expect(r.loadout.primary.id).toBe('fuzil_basico'); }
+    if (r.ok) { expect(r.loadout.cost).toBe(0); expect(r.loadout.primary.empty).toBe(true); expect(r.loadout.secondary.empty).toBe(true); }
   });
   it('desconto de recruta de 50% até o nível 10', () => {
     expect(priceFor(ITEM_BY_ID.fuzil_padrao, 1)).toBe(800);

@@ -193,8 +193,8 @@ class Game {
       case 'inventory': {
         const result=buildLoadout(m.items,99,Infinity);
         if(result.ok){this.loadout=result.loadout;const armor=result.loadout.armor?.armor??0;this.speedMul=armor>=4?.92:armor===3?.96:1;}
-        this.cargo=m.cargo;this.ui.setCargo(m.cargo);
-        if(m.purchased){this.localAmmo=m.ammo[this.slot]??0;this.ui.closeShop();this.lockInput();}
+        this.cargo=m.cargo;this.ui.setCargo(m.cargo); this.localAmmo=m.ammo[this.slot]??0;
+        if(m.purchased){this.ui.rememberPurchase(m.items,m.cargo);this.localAmmo=m.ammo[this.slot]??0;this.ui.closeShop();this.lockInput();}
         if(!$('board').classList.contains('hidden'))this.ui.inventory(this.loadout);
         this.refreshTools();break;
       }
@@ -428,7 +428,8 @@ class Game {
 
   private weapon() {
     const lo = this.loadout;
-    return lo ? (this.slot === 0 ? lo.primary : lo.secondary) : null;
+    const item = lo ? (this.slot === 0 ? lo.primary : lo.secondary) : null;
+    return item?.empty ? null : item;
   }
 
   /** aumento efetivo ao mirar: mira comprada > aumento embutido da arma */
@@ -667,7 +668,7 @@ class Game {
     // HUD (10 Hz)
     if (now - this.hudAt > 100) {
       this.hudAt = now;
-      const scoped = alive && this.vm.scoped && this.vm.adsAmount > 0.85;
+      const scoped = alive && !!w && this.vm.scoped && this.vm.adsAmount > 0.85;
       this.ui.aim(scoped);
       this.ui.hint(actionHint);
       if (this.own) this.ui.setVitals(alive ? this.own.hp : 0, alive ? Math.min(this.localAmmo, 999) : 0, alive ? this.own.reserve : 0, it?.name ?? '', reloading, this.slot === 0 ? this.loadout?.sight?.name ?? '' : '');
@@ -830,13 +831,39 @@ function runBench() {
     button.onclick = () => { sound.unlock(); const r = rewardFor('kill', 'cz'); confirmation.add('kill', r.cash, r.xp); sound.killCash(); };
     document.body.append(button);
   }
+  // Inspeção da transição comerciante → renascimento, sem conectar à partida.
+  if (bq.has('shop')) {
+    const ui = new UI(), kit = buildLoadout([], 99, Infinity);
+    if (bq.has('rebuy')) {
+      ui.setProfile({...ui.profile,cash:10000,level:10});
+      ui.rememberPurchase(['fuzil_padrao','pistola','mochila_pequena'],[{weapon:'fuzil_padrao',rounds:30},null,null]);
+    }
+    if (kit.ok) ui.openMerchant(kit.loadout, []);
+    const die = document.createElement('button'); die.textContent = 'Simular renascimento';
+    die.style.cssText = 'position:fixed;top:4px;left:4px;z-index:1000';
+    die.onclick = () => { ui.openShop('Inspeção do renascimento', 0); ui.setProfile({ ...ui.profile, cash: 10000 }); die.remove(); };
+    document.body.append(die);
+  }
   let vmRef: ViewModel | null = null, vmZoom = 1;
+  let vmAiming = bq.has('ads');
+  let vmPaused = false;
   if (bq.has('vm')) {
     const gunItem = ITEM_BY_ID[bq.get('gun') ?? 'fuzil_basico'];
     const sightItem = bq.get('sight') ? ITEM_BY_ID[bq.get('sight')!] : undefined;
     vmRef = new ViewModel(gs.camera, TEAM_LOOK[0].jacket);
     vmRef.setWeapon(gunItem, sightItem);
     vmZoom = sightItem?.sight ? sightItem.sight.zoom : gunItem.weapon!.zoom;
+    if (bq.has('slowads')) {
+      const toggle = document.createElement('button'); toggle.textContent='Mirar / baixar (câmera lenta)';
+      toggle.style.cssText='position:fixed;top:4px;left:4px;z-index:1000';
+      toggle.onclick=()=>{vmPaused=false;vmAiming=!vmAiming;};document.body.append(toggle);
+      const frame=document.createElement('button');frame.textContent='Congelar transição';
+      frame.style.cssText='position:fixed;top:44px;left:4px;z-index:1000';
+      frame.onclick=()=>{
+        for(let i=0;i<180;i++)vmRef!.update(1/60,0,true,false,false,false,0,0,true);
+        vmRef!.update(.8/12,0,true,true,false,false,.02,-.01,true);vmAiming=true;vmPaused=true;
+      };document.body.append(frame);
+    }
   }
   // ?bench=1&guns=1: catálogo lateral de todas as armas, no céu, para conferir os modelos
   const gunsMode = bq.has('guns');
@@ -870,7 +897,7 @@ function runBench() {
       // modo "arma na mão": câmera parada, arma em 1ª pessoa, com ou sem mira (?ads=1)
       gs.camera.position.set(c.x + 30, cy + 1.62, c.z + 30);
       gs.camera.lookAt(c.x, cy + 1.2, c.z);
-      vmRef.update(dt, 0, true, bq.has('ads'), false, false, 0, 0, true);
+      vmRef.update(vmPaused ? 0 : dt * (bq.has('slowads') ? .1 : 1), 0, true, vmAiming, false, false, 0, 0, true);
       $('scope').classList.toggle('hidden', !(vmRef.scoped && vmRef.adsAmount > .85));
       gs.camera.fov = BASE_FOV * (1 - (1 - vmZoom) * vmRef.adsAmount);
       gs.camera.updateProjectionMatrix();

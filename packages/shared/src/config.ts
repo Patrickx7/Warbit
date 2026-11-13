@@ -48,7 +48,8 @@ export const STAMINA_DRAIN = 1 / 25; // fôlego: ~25 s de corrida
 export const STAMINA_REGEN = 1 / 7;
 export const STAMINA_RESUME = 0.3; // cansado: só volta a correr com 30%
 export const SPRINT_FLAG_SPEED = 4.6;
-export const RESPAWN_SECONDS = 10;
+export const RESPAWN_SECONDS = 0;
+export const BOT_RESPAWN_SECONDS = 10;
 
 // FOB (posição fortificada construída pelo time)
 export const FOB_HP = 300;

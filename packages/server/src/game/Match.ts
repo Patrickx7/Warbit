@@ -1,4 +1,4 @@
-import { cargoCapacity, loadoutIds, getEquipmentVendorPos, MAGAZINE_PRICE, ITEM_BY_ID, priceFor } from '@warbit/shared';
+import { BOT_RESPAWN_SECONDS, cargoCapacity, loadoutIds, getEquipmentVendorPos, MAGAZINE_PRICE, ITEM_BY_ID, priceFor } from '@warbit/shared';
 import {
   ALIVE_MASK_BYTES, ARMOR_REDUCTION, BASE_MAGS, BOT_START_CASH, BTN2_ADS, BTN2_BUILD, BTN2_HEAL, BTN2_MARK, BTN2_NADE, BTN2_RELOAD,
   BTN2_SECONDARY, BTN2_USE, BTN3_FOB, BTN_FIRE, BTN_SPRINT, BUILD_USES, BoxKind, CROUCH_HEIGHT, CZ_RADIUS, DEFIB_SECONDS,
@@ -640,6 +640,7 @@ export class Match {
     const slot = inp.buttons2 & BTN2_SECONDARY ? 1 : 0;
     if (slot !== p.slot) { p.slot = slot; p.reloadEnd = 0; p.nextFire = Math.max(p.nextFire, p.simTime + 0.45); }
     const w = (slot === 0 ? lo.primary : lo.secondary).weapon!;
+    if ((slot === 0 ? lo.primary : lo.secondary).empty) return;
     if (p.reloadEnd > 0) {
       if (p.simTime < p.reloadEnd) return;
       if (p.bot) {
@@ -820,8 +821,9 @@ export class Match {
     p.loadout = null; // morreu: perdeu o equipamento comprado
     p.lifeProfit = 0;
     p.profileDirty = true; p.saveDirty = true;
-    p.respawnAt = this.tick + RESPAWN_SECONDS * TICK_RATE + (p.bot ? Math.floor(this.rnd() * 5 * TICK_RATE) : 0);
-    this.sendTo(p, { t: 'life', life: LIFE_NONE, reason, wait: RESPAWN_SECONDS });
+    const wait = p.bot ? BOT_RESPAWN_SECONDS : RESPAWN_SECONDS;
+    p.respawnAt = this.tick + wait * TICK_RATE + (p.bot ? Math.floor(this.rnd() * 5 * TICK_RATE) : 0);
+    this.sendTo(p, { t: 'life', life: LIFE_NONE, reason, wait });
   }
 
   private tools(p: Player, inp: InputMsg) {
