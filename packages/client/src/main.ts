@@ -649,7 +649,6 @@ class Game {
     const reloading = !!this.own && (this.own.flags & 1) !== 0;
     const sprintingNow = alive && !p.prone && !p.crouch && speed > SPRINT_FLAG_SPEED && this.keys.has('ShiftLeft');
     if (it?.weapon) this.vm.setWeapon(it, this.slot === 0 ? this.loadout?.sight : undefined,!!(this.slot===0?this.loadout?.suppressor:this.loadout?.secondarySuppressor));
-    this.vm.scoped = zoomEff <= 0.3;
     this.vm.update(dt, speed, p.onGround, ads, reloading, sprintingNow, this.yaw - this.lastYaw, this.pitch - this.lastPitch, alive && !!w && !driving);
     this.lastYaw = this.yaw; this.lastPitch = this.pitch;
     this.fx.update(dt);
@@ -660,7 +659,7 @@ class Game {
     // HUD (10 Hz)
     if (now - this.hudAt > 100) {
       this.hudAt = now;
-      const scoped = alive && zoomEff <= 0.3 && this.vm.adsAmount > 0.85;
+      const scoped = alive && this.vm.scoped && this.vm.adsAmount > 0.85;
       this.ui.aim(scoped);
       this.ui.hint(actionHint);
       if (this.own) this.ui.setVitals(alive ? this.own.hp : 0, alive ? Math.min(this.localAmmo, 999) : 0, alive ? this.own.reserve : 0, it?.name ?? '', reloading, this.slot === 0 ? this.loadout?.sight?.name ?? '' : '');
@@ -856,8 +855,8 @@ function runBench() {
       // modo "arma na mão": câmera parada, arma em 1ª pessoa, com ou sem mira (?ads=1)
       gs.camera.position.set(c.x + 30, cy + 1.62, c.z + 30);
       gs.camera.lookAt(c.x, cy + 1.2, c.z);
-      vmRef.scoped = vmZoom <= 0.3;
       vmRef.update(dt, 0, true, bq.has('ads'), false, false, 0, 0, true);
+      $('scope').classList.toggle('hidden', !(vmRef.scoped && vmRef.adsAmount > .85));
       gs.camera.fov = BASE_FOV * (1 - (1 - vmZoom) * vmRef.adsAmount);
       gs.camera.updateProjectionMatrix();
     } else if (gunsMode) {

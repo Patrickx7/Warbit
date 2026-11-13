@@ -213,6 +213,8 @@ export function gunModel(id: string): GunModel {
     scopeParts.push(tubeZ(r + 0.008, 0.05, z0 + 0.01, y, 0x101112, 0, 12, true));
     scopeParts.push(tubeZ(r + 0.012, 0.06, z0 - len + 0.05, y, 0x101112, 0, 12, true));
     scopeParts.push(ring(r + 0.008, z0 + 0.01, y, 0x0d0d0e, 0.006), ring(r + 0.012, z0 - len + 0.0, y, 0x0d0d0e, 0.006));
+    scopeParts.push(tubeZ(r + .001, .002, z0 + .005, y, 0x294b56, 0, 24));
+    scopeParts.push(tubeZ(r + .005, .002, z0 - len + .003, y, 0x294b56, 0, 24));
     scopeParts.push(paint(new THREE.CylinderGeometry(0.009, 0.009, 0.03, 6), 0x1a1a1a, M(0, y + r + 0.008, z0 - len / 2)));
     for (const dz of [-0.05, -len + 0.08]) scopeParts.push(box(0.016, y - top, 0.02, 0x1b1b1b, M(0, top + (y - top) / 2, z0 + dz), 0.002));
     sightY = y; rearZ = z0; scope = true;

@@ -14,7 +14,8 @@ function part(w: number, h: number, d: number, color: number, x: number, y: numb
 }
 /** tubo OCO ao longo de Z (sem tampas: dá para ver através) */
 function hollow(r: number, len: number, color: number, x: number, y: number, z: number): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 12, 1, true), mat(color));
+  const material = mat(color); material.side = THREE.DoubleSide;
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 24, 1, true), material);
   m.rotation.x = Math.PI / 2;
   m.position.set(x, y, z);
   return m;
@@ -47,13 +48,16 @@ function buildOptic(it: Item, centerY: number, z: number): THREE.Group {
       g.add(ring, dot);
     }
   } else {
-    // luneta: tubo aberto com aros. Antes era um cilindro fechado e tapava a tela (ficava tudo preto).
-    // Em 2x a visão continua livre pelo meio; de 4x para cima entra o desenho da luneta (overlay).
+    // Lentes fecham o modelo externo; ao alinhar o olho, entra uma única visão óptica.
     const len = s.zoom < 0.2 ? 0.3 : s.zoom < 0.3 ? 0.24 : 0.17;
     const r = s.zoom < 0.3 ? 0.028 : 0.024;
     g.add(hollow(r, len, 0x15171a, 0, centerY, z));
     g.add(hollow(r + 0.007, 0.04, 0x0e0f10, 0, centerY, z - len / 2 + 0.015), hollow(r + 0.005, 0.035, 0x0e0f10, 0, centerY, z + len / 2 - 0.012));
     g.add(ringMesh(r + 0.007, 0x0b0b0c, 0, centerY, z - len / 2 - 0.004, 0.006), ringMesh(r + 0.005, 0x0b0b0c, 0, centerY, z + len / 2 + 0.004, 0.006));
+    for (const [radius, depth] of [[r + .001, z - len / 2 - .003], [r - .001, z + len / 2 + .003]]) {
+      const lens = new THREE.Mesh(new THREE.CircleGeometry(radius, 24), new THREE.MeshBasicMaterial({ color: 0x294b56, side: THREE.DoubleSide, fog: false }));
+      lens.position.set(0, centerY, depth); g.add(lens);
+    }
     g.add(part(0.022, 0.022, 0.07, DARK, 0, centerY - r - 0.012, z)); // base de montagem
     if (s.zoom >= 0.3) {
       // retículo fino dentro da luneta de 2x
@@ -141,6 +145,7 @@ export class ViewModel {
     const gm = this.model!;
     if (this.optic) { this.gun!.remove(this.optic); this.optic = null; }
     const optical = !!sight?.sight && cls !== 'pistol';
+    this.scoped = optical ? sight!.sight!.kind === 'scope' : gm.scope;
     if (this.ironsM) this.ironsM.visible = !optical;
     if (this.scopeM) this.scopeM.visible = !optical;
     this.sightY = gm.sightY;
@@ -192,7 +197,7 @@ export class ViewModel {
     this.muzzle.set(g.position.x, g.position.y + 0.02, g.position.z + this.model.muzzleZ * SCALE);
   }
 
-  /** true quando o aumento é grande o bastante para usar o overlay de luneta */
+  /** Lunetas usam uma única abertura; miras abertas continuam visíveis no modelo. */
   scoped = false;
 
   get adsAmount() { return this.ads; }

@@ -405,6 +405,13 @@ export class UI {
   }
 
   private renderShop() {
+    if (!this.merchant) {
+      $('shop').classList.add('respawn-only');
+      $('shop').classList.remove('ammo-mode', 'accessory-mode');
+      for (const id of ['magazineShelf', 'items', 'slots', 'shopCargo', 'equipmentExtras']) $(id).replaceChildren();
+      ($('spawnBase') as HTMLButtonElement).dataset.bad = '';
+      return;
+    }
     const lvl = this.profile.level;
     for (const id of [...this.sel]) if (!this.available(ITEM_BY_ID[id])) this.sel.delete(id);
     for (const b of Array.from($('tabs').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.cat === this.cat);
